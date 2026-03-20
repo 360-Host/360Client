@@ -1,0 +1,120 @@
+name: Build 360Launcher
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone Flarial dll-oss base
+        run: git clone https://github.com/flarialmc/dll-oss.git dll
+        shell: bash
+
+      - name: Clone Flarial launcher base
+        run: git clone https://github.com/flarialmc/launcher.git launcher-base
+        shell: bash
+
+      - name: Overlay our launcher files
+        shell: pwsh
+        run: |
+          $dst = "launcher-base/src/Flarial.Launcher"
+          New-Item -Force -ItemType Directory "$dst/Runtime" | Out-Null
+          Copy-Item -Force "Launcher360.cs"                "$dst/Launcher360.cs"
+          Copy-Item -Force "Flarial.Launcher.csproj"       "$dst/Flarial.Launcher.csproj"
+
+      - name: Overlay our client files
+        shell: pwsh
+        run: |
+          $base = "dll/src"
+          Copy-Item -Force "360Client.hpp" "$base/Client/GUI/Engine/360Client.hpp"
+          $mod = "$base/Client/Module/Modules"
+          New-Item -Force -ItemType Directory "$mod/RenderOptions"   | Out-Null
+          New-Item -Force -ItemType Directory "$mod/Fullbright"      | Out-Null
+          New-Item -Force -ItemType Directory "$mod/EntityCuller"    | Out-Null
+          New-Item -Force -ItemType Directory "$mod/RenderOptimizer" | Out-Null
+          # Single source file — placed in Modules root, included by Manager
+          Copy-Item -Force "360Client.cpp" "$mod/360Client_All.cpp"
+
+      - name: Add 360Client.hpp include to EngineCore.hpp
+        shell: pwsh
+        run: |
+          $f = "dll/src/Client/GUI/Engine/EngineCore.hpp"
+          $c = Get-Content $f -Raw
+          if ($c -notmatch "360Client.hpp") {
+            $c = "#include `"360Client.hpp`"`n" + $c
+            Set-Content $f $c
+          }
+
+      - name: Register new modules in Manager.cpp
+        shell: pwsh
+        run: |
+          $f = "dll/src/Client/Module/Manager.cpp"
+          $c = Get-Content $f -Raw
+          $inc = '#include "Modules/360Client_All.cpp"'
+          $reg = 'modules.push_back(new RenderOptions());
+          modules.push_back(new Fullbright());
+          modules.push_back(new EntityCuller());
+          modules.push_back(new RenderOptimizer());'
+          if ($c -notmatch "360Client_All") {
+            $c = $inc + "`n" + $c
+            # Insert before first push_back
+            $c = $c -replace '(modules\.push_back\(new)', "$reg`n`$1", 1
+            Set-Content $f $c
+          }
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build DLL
+        shell: pwsh
+        run: |
+          cmake -B dll/build -S dll -G "Visual Studio 17 2022" -A x64
+          cmake --build dll/build --config Release
+
+      - name: Embed DLL into launcher
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem "dll/build/Release" -Filter "*.dll" | Select-Object -First 1
+          if (!$dll) { Write-Error "DLL not found!"; exit 1 }
+          $res = "launcher-base/src/Flarial.Launcher/Resources"
+          New-Item -Force -ItemType Directory $res | Out-Null
+          Copy-Item -Force $dll.FullName "$res/360Client.dll"
+          Set-Content "$res/360Client.version.txt" "${{ github.ref_name }}"
+          Write-Host "Embedded $($dll.Name)"
+
+      - uses: actions/setup-dotnet@v4
+
+      - name: Build 360Launcher.exe
+        shell: pwsh
+        run: |
+          dotnet publish launcher-base/src/Flarial.Launcher/Flarial.Launcher.csproj `
+            --configuration Release --runtime win-x64 --self-contained false -o out
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "360Launcher ${{ github.ref_name }}"
+          body: |
+            ## 360Launcher ${{ github.ref_name }}
+            **One file. Everything inside.**
+            360Client.dll is built into this .exe — no separate download needed.
+
+            ### Install
+            1. Download `360Launcher.exe`
+            2. Run it
+            3. Minecraft Bedrock must be installed via Microsoft Store
+
+            ### What's included
+            - Blue theme launcher with left-rail nav
+            - 360Client with entity culling, chunk FOV culling, FPS presets, smooth lighting
+            - Self-updating: checks GitHub and swaps itself automatically
+          files: out/360Launcher.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
