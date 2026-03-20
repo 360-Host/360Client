@@ -146,7 +146,7 @@ namespace Flarial.Launcher.Runtime
     public sealed class Client360
     {
         private const string ApiUrl =
-            "https://api.github.com/repos/YOUR_USERNAME/360Client/releases/latest";
+            "https://api.github.com/repos/360-Host/360Client/releases/latest";
 
         public static readonly Client360 Instance = new();
         private Client360() { }
