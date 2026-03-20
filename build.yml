@@ -14,15 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone Flarial dll-oss base
-        run: git clone https://github.com/flarialmc/dll-oss.git dll
+      - name: Clone bases
         shell: bash
+        run: |
+          git clone https://github.com/flarialmc/dll-oss.git dll
+          git clone https://github.com/flarialmc/launcher.git launcher-base
 
-      - name: Clone Flarial launcher base
-        run: git clone https://github.com/flarialmc/launcher.git launcher-base
-        shell: bash
-
-      - name: Overlay our launcher files
+      - name: Copy launcher files
         shell: pwsh
         run: |
           $dst = "launcher-base/src/Flarial.Launcher"
@@ -30,63 +28,58 @@ jobs:
           Copy-Item -Force "Launcher360.cs" "$dst/Launcher360.cs"
           Copy-Item -Force "Flarial.Launcher.csproj" "$dst/Flarial.Launcher.csproj"
 
-      - name: Overlay our client files
+      - name: Copy client files
         shell: pwsh
         run: |
-          $base = "dll/src"
-          Copy-Item -Force "360Client.hpp" "$base/Client/GUI/Engine/360Client.hpp"
-          $mod = "$base/Client/Module/Modules"
+          Copy-Item -Force "360Client.hpp" "dll/src/Client/GUI/Engine/360Client.hpp"
+          $mod = "dll/src/Client/Module/Modules"
           New-Item -Force -ItemType Directory "$mod/RenderOptions" | Out-Null
           New-Item -Force -ItemType Directory "$mod/Fullbright" | Out-Null
           New-Item -Force -ItemType Directory "$mod/EntityCuller" | Out-Null
           New-Item -Force -ItemType Directory "$mod/RenderOptimizer" | Out-Null
           Copy-Item -Force "360Client.cpp" "$mod/360Client_All.cpp"
 
-      - name: Patch EngineCore.hpp
+      - name: Patch source files
         shell: pwsh
         run: |
-          $f = "dll/src/Client/GUI/Engine/EngineCore.hpp"
-          $c = Get-Content $f -Raw
-          if ($c -notmatch "360Client.hpp") {
-            $c = "#include `"360Client.hpp`"`n" + $c
-            Set-Content $f $c
+          $engine = "dll/src/Client/GUI/Engine/EngineCore.hpp"
+          $ec = Get-Content $engine -Raw
+          if ($ec -notmatch "360Client.hpp") {
+            Set-Content $engine ("#include `"360Client.hpp`"`n" + $ec)
           }
 
-      - name: Patch Manager.cpp
-        shell: pwsh
-        run: |
-          $f = "dll/src/Client/Module/Manager.cpp"
-          $lines = Get-Content $f
-          $newLines = [System.Collections.Generic.List[string]]::new()
-          $newLines.Add('#include "Modules/360Client_All.cpp"')
-          $inserted = $false
-          foreach ($line in $lines) {
-            if (-not $inserted -and $line -match 'modules\.push_back\(new') {
-              $newLines.Add('  modules.push_back(new RenderOptions());')
-              $newLines.Add('  modules.push_back(new Fullbright());')
-              $newLines.Add('  modules.push_back(new EntityCuller());')
-              $newLines.Add('  modules.push_back(new RenderOptimizer());')
-              $inserted = $true
+          $manager = "dll/src/Client/Module/Manager.cpp"
+          $lines = Get-Content $manager
+          if (-not ($lines -match "360Client_All")) {
+            $out = [System.Collections.Generic.List[string]]::new()
+            $out.Add('#include "Modules/360Client_All.cpp"')
+            $done = $false
+            foreach ($line in $lines) {
+              if (-not $done -and $line -match "push_back") {
+                $out.Add("  modules.push_back(new RenderOptions());")
+                $out.Add("  modules.push_back(new Fullbright());")
+                $out.Add("  modules.push_back(new EntityCuller());")
+                $out.Add("  modules.push_back(new RenderOptimizer());")
+                $done = $true
+              }
+              $out.Add($line)
             }
-            $newLines.Add($line)
+            Set-Content $manager $out
           }
-          Set-Content $f $newLines
 
       - uses: microsoft/setup-msbuild@v2
 
-      - name: Configure CMake
-        shell: pwsh
-        run: cmake -B dll/build -S dll -G "Visual Studio 17 2022" -A x64
-
       - name: Build DLL
         shell: pwsh
-        run: cmake --build dll/build --config Release
+        run: |
+          cmake -B dll/build -S dll -G "Visual Studio 17 2022" -A x64
+          cmake --build dll/build --config Release
 
-      - name: Embed DLL into launcher
+      - name: Embed DLL
         shell: pwsh
         run: |
           $dll = Get-ChildItem "dll/build/Release" -Filter "*.dll" | Select-Object -First 1
-          if (!$dll) { Write-Error "DLL not found!"; exit 1 }
+          if (!$dll) { Write-Error "DLL not found"; exit 1 }
           $res = "launcher-base/src/Flarial.Launcher/Resources"
           New-Item -Force -ItemType Directory $res | Out-Null
           Copy-Item -Force $dll.FullName "$res/360Client.dll"
@@ -94,21 +87,17 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
 
-      - name: Build 360Launcher.exe
+      - name: Build exe
         shell: pwsh
         run: |
           dotnet publish launcher-base/src/Flarial.Launcher/Flarial.Launcher.csproj `
             --configuration Release --runtime win-x64 --self-contained false -o out
 
-      - name: Create Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
           name: "360Launcher ${{ github.ref_name }}"
-          body: |
-            ## 360Launcher ${{ github.ref_name }}
-            One file. Everything inside.
-            Download 360Launcher.exe — launcher and 360Client DLL are merged.
-            Minecraft Bedrock must be installed via Microsoft Store.
+          body: "One file. 360Launcher + 360Client merged."
           files: out/360Launcher.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
