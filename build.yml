@@ -2,102 +2,67 @@ name: Build 360Launcher
 
 on:
   push:
-    tags: ["v*.*.*"]
-  workflow_dispatch:
+    tags:
+      - 'v*'
 
 jobs:
   build:
     runs-on: windows-latest
-    permissions:
-      contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Clone bases
-        shell: bash
-        run: |
-          git clone https://github.com/flarialmc/dll-oss.git dll
-          git clone https://github.com/flarialmc/launcher.git launcher-base
+      # Clone base repos
+      - name: Clone DLL base
+        run: git clone https://github.com/flarialmc/dll-oss.git dll
 
-      - name: Copy launcher files
+      - name: Clone launcher base
+        run: git clone https://github.com/flarialmc/launcher.git launcher-base
+
+      # Inject module registration safely
+      - name: Patch Module Manager
         shell: pwsh
         run: |
-          $dst = "launcher-base/src/Flarial.Launcher"
-          New-Item -Force -ItemType Directory "$dst/Runtime" | Out-Null
-          Copy-Item -Force "Launcher360.cs" "$dst/Launcher360.cs"
-          Copy-Item -Force "Flarial.Launcher.csproj" "$dst/Flarial.Launcher.csproj"
+          $file = "dll/src/Client/Module/Manager.cpp"
+          $c = Get-Content $file -Raw
 
-      - name: Copy client files
-        shell: pwsh
-        run: |
-          Copy-Item -Force "360Client.hpp" "dll/src/Client/GUI/Engine/360Client.hpp"
-          $mod = "dll/src/Client/Module/Modules"
-          New-Item -Force -ItemType Directory "$mod/RenderOptions" | Out-Null
-          New-Item -Force -ItemType Directory "$mod/Fullbright" | Out-Null
-          New-Item -Force -ItemType Directory "$mod/EntityCuller" | Out-Null
-          New-Item -Force -ItemType Directory "$mod/RenderOptimizer" | Out-Null
-          Copy-Item -Force "360Client.cpp" "$mod/360Client_All.cpp"
+          # Your module registration line (adjust if needed)
+          $reg = 'modules.push_back(new RenderOptions()); modules.push_back(new Fullbright());'
 
-      - name: Patch source files
-        shell: pwsh
-        run: |
-          $engine = "dll/src/Client/GUI/Engine/EngineCore.hpp"
-          $ec = Get-Content $engine -Raw
-          if ($ec -notmatch "360Client.hpp") {
-            Set-Content $engine ("#include `"360Client.hpp`"`n" + $ec)
+          # Insert BEFORE first occurrence of modules.push_back(new ...)
+          $match = [regex]::Match($c, 'modules\.push_back\(new')
+          if ($match.Success) {
+              $index = $match.Index
+              $c = $c.Insert($index, "$reg`n")
           }
 
-          $manager = "dll/src/Client/Module/Manager.cpp"
-          $lines = Get-Content $manager
-          if (-not ($lines -match "360Client_All")) {
-            $out = [System.Collections.Generic.List[string]]::new()
-            $out.Add('#include "Modules/360Client_All.cpp"')
-            $done = $false
-            foreach ($line in $lines) {
-              if (-not $done -and $line -match "push_back") {
-                $out.Add("  modules.push_back(new RenderOptions());")
-                $out.Add("  modules.push_back(new Fullbright());")
-                $out.Add("  modules.push_back(new EntityCuller());")
-                $out.Add("  modules.push_back(new RenderOptimizer());")
-                $done = $true
-              }
-              $out.Add($line)
-            }
-            Set-Content $manager $out
-          }
+          Set-Content $file $c
 
-      - uses: microsoft/setup-msbuild@v2
-
+      # Build DLL 
       - name: Build DLL
+        run: |
+          cd dll
+          mkdir build
+          cd build
+          cmake ..
+          cmake --build . --config Release
+
+      # Copy DLL into launcher resources
+      - name: Copy DLL to Launcher
         shell: pwsh
         run: |
-          cmake -B dll/build -S dll -G "Visual Studio 17 2022" -A x64
-          cmake --build dll/build --config Release
+          Copy-Item "dll/build/Release/*.dll" "launcher-base/src/Flarial.Launcher/Resources/360Client.dll" -Force
 
-      - name: Embed DLL
-        shell: pwsh
+      # Build launcher
+      - name: Build Launcher
         run: |
-          $dll = Get-ChildItem "dll/build/Release" -Filter "*.dll" | Select-Object -First 1
-          if (!$dll) { Write-Error "DLL not found"; exit 1 }
-          $res = "launcher-base/src/Flarial.Launcher/Resources"
-          New-Item -Force -ItemType Directory $res | Out-Null
-          Copy-Item -Force $dll.FullName "$res/360Client.dll"
-          Set-Content "$res/360Client.version.txt" "${{ github.ref_name }}"
+          cd launcher-base/src/Flarial.Launcher
+          dotnet build -c Release
 
-      - uses: actions/setup-dotnet@v4
-
-      - name: Build exe
-        shell: pwsh
-        run: |
-          dotnet publish launcher-base/src/Flarial.Launcher/Flarial.Launcher.csproj `
-            --configuration Release --runtime win-x64 --self-contained false -o out
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      # Upload artifact
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
         with:
-          name: "360Launcher ${{ github.ref_name }}"
-          body: "One file. 360Launcher + 360Client merged."
-          files: out/360Launcher.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: 360Client
+          path: launcher-base/src/Flarial.Launcher/bin/Release/**/*
