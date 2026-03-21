@@ -19,6 +19,10 @@ jobs:
         run: git clone https://github.com/flarialmc/dll-oss.git dll
         shell: bash
 
+      - name: Install GLM (needed for rendering)
+        run: git clone https://github.com/g-truc/glm.git dll/external/glm
+        shell: bash
+
       - name: Clone Flarial launcher base
         run: git clone https://github.com/flarialmc/launcher.git launcher-base
         shell: bash
@@ -35,6 +39,7 @@ jobs:
         shell: pwsh
         run: |
           $base = "dll/src"
+
           Copy-Item -Force "360Client.hpp" "$base/Client/GUI/Engine/360Client.hpp"
 
           $mod = "$base/Client/Module/Modules"
@@ -50,7 +55,6 @@ jobs:
         run: |
           $f = "dll/src/Client/GUI/Engine/EngineCore.hpp"
           $c = Get-Content $f -Raw
-
           if ($c -notmatch "360Client.hpp") {
             $c = "#include `"360Client.hpp`"`n" + $c
             Set-Content $f $c
@@ -67,23 +71,28 @@ jobs:
 
           if ($c -notmatch "360Client_All") {
             $c = $inc + "`n" + $c
-
             $match = [regex]::Match($c, 'modules\.push_back\(new')
             if ($match.Success) {
               $index = $match.Index
               $c = $c.Insert($index, "$reg`n")
             }
-
             Set-Content $f $c
           }
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Build DLL
+      - name: Build DLL (WITH GLM)
         shell: pwsh
         run: |
-          cmake -B dll/build -S dll -G "Visual Studio 17 2022" -A x64
+          $glmPath = Resolve-Path "dll/external/glm"
+
+          cmake -B dll/build -S dll `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DCMAKE_CXX_STANDARD=17 `
+            -DCMAKE_CXX_FLAGS="/I$glmPath"
+
           cmake --build dll/build --config Release
 
       - name: Embed DLL
