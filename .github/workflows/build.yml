@@ -23,30 +23,29 @@ jobs:
         run: git clone https://github.com/flarialmc/launcher.git launcher-base
         shell: bash
 
-      - name: Overlay our launcher files
+      - name: Overlay launcher files
         shell: pwsh
         run: |
           $dst = "launcher-base/src/Flarial.Launcher"
           New-Item -Force -ItemType Directory "$dst/Runtime" | Out-Null
-          Copy-Item -Force "Launcher360.cs"          "$dst/Launcher360.cs"
+          Copy-Item -Force "Launcher360.cs" "$dst/Launcher360.cs"
           Copy-Item -Force "Flarial.Launcher.csproj" "$dst/Flarial.Launcher.csproj"
 
-      - name: Overlay our client files
+      - name: Overlay client files
         shell: pwsh
         run: |
           $base = "dll/src"
-
           Copy-Item -Force "360Client.hpp" "$base/Client/GUI/Engine/360Client.hpp"
 
           $mod = "$base/Client/Module/Modules"
-          New-Item -Force -ItemType Directory "$mod/RenderOptions"   | Out-Null
-          New-Item -Force -ItemType Directory "$mod/Fullbright"      | Out-Null
-          New-Item -Force -ItemType Directory "$mod/EntityCuller"    | Out-Null
+          New-Item -Force -ItemType Directory "$mod/RenderOptions" | Out-Null
+          New-Item -Force -ItemType Directory "$mod/Fullbright" | Out-Null
+          New-Item -Force -ItemType Directory "$mod/EntityCuller" | Out-Null
           New-Item -Force -ItemType Directory "$mod/RenderOptimizer" | Out-Null
 
           Copy-Item -Force "360Client.cpp" "$mod/360Client_All.cpp"
 
-      - name: Add 360Client.hpp include to EngineCore.hpp
+      - name: Patch EngineCore.hpp
         shell: pwsh
         run: |
           $f = "dll/src/Client/GUI/Engine/EngineCore.hpp"
@@ -57,19 +56,14 @@ jobs:
             Set-Content $f $c
           }
 
-      - name: Register new modules in Manager.cpp
+      - name: Register modules
         shell: pwsh
         run: |
           $f = "dll/src/Client/Module/Manager.cpp"
           $c = Get-Content $f -Raw
 
           $inc = '#include "Modules/360Client_All.cpp"'
-          $reg = @"
-modules.push_back(new RenderOptions());
-modules.push_back(new Fullbright());
-modules.push_back(new EntityCuller());
-modules.push_back(new RenderOptimizer());
-"@
+          $reg = "modules.push_back(new RenderOptions());`nmodules.push_back(new Fullbright());`nmodules.push_back(new EntityCuller());`nmodules.push_back(new RenderOptimizer());"
 
           if ($c -notmatch "360Client_All") {
             $c = $inc + "`n" + $c
@@ -92,7 +86,7 @@ modules.push_back(new RenderOptimizer());
           cmake -B dll/build -S dll -G "Visual Studio 17 2022" -A x64
           cmake --build dll/build --config Release
 
-      - name: Embed DLL into launcher
+      - name: Embed DLL
         shell: pwsh
         run: |
           $dll = Get-ChildItem "dll/build/Release" -Filter "*.dll" | Select-Object -First 1
@@ -104,12 +98,10 @@ modules.push_back(new RenderOptimizer());
           Copy-Item -Force $dll.FullName "$res/360Client.dll"
           Set-Content "$res/360Client.version.txt" "${{ github.ref_name }}"
 
-          Write-Host "Embedded $($dll.Name)"
-
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
 
-      - name: Build 360Launcher.exe
+      - name: Build EXE
         shell: pwsh
         run: |
           dotnet publish launcher-base/src/Flarial.Launcher/Flarial.Launcher.csproj `
@@ -122,20 +114,6 @@ modules.push_back(new RenderOptimizer());
         uses: softprops/action-gh-release@v2
         with:
           name: "360Launcher ${{ github.ref_name }}"
-          body: |
-            ## 360Launcher ${{ github.ref_name }}
-            **One file. Everything inside.**
-            360Client.dll is built into this .exe — no separate download needed.
-
-            ### Install
-            1. Download `360Launcher.exe`
-            2. Run it
-            3. Minecraft Bedrock must be installed via Microsoft Store
-
-            ### What's included
-            - Blue theme launcher with left-rail nav
-            - 360Client with entity culling, chunk FOV culling, FPS presets, smooth lighting
-            - Self-updating: checks GitHub and swaps itself automatically
           files: out/360Launcher.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
