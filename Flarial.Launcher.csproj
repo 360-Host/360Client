@@ -20,14 +20,15 @@
     <Compile Include="..\AssemblyVersion.cs" />
     <Compile Include="Launcher360.cs" />
     <EmbeddedResource Include="Resources\Application.ico" LogicalName="Application.ico" />
-    <EmbeddedResource Include="Resources\360Client.dll"         LogicalName="360Client.dll"
+    <EmbeddedResource Include="Resources\360Client.dll" LogicalName="360Client.dll"
                       Condition="Exists('Resources\360Client.dll')" />
     <EmbeddedResource Include="Resources\360Client.version.txt" LogicalName="360Client.version.txt"
                       Condition="Exists('Resources\360Client.version.txt')" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Windows.Win32\Windows.Win32.csproj"                         PrivateAssets="All" />
-    <ProjectReference Include="..\Flarial.Launcher.Runtime\Flarial.Launcher.Runtime.csproj"  PrivateAssets="All" />
+    <!-- These match the actual project names in flarialmc/launcher -->
+    <ProjectReference Include="..\Flarial.Runtime\Flarial.Runtime.csproj"     PrivateAssets="All" />
+    <ProjectReference Include="..\Flarial.Unmanaged\Flarial.Unmanaged.csproj" PrivateAssets="All" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Costura.Fody"                    Version="6.0.0"        PrivateAssets="All" />
