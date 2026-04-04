@@ -50,6 +50,14 @@ jobs:
 
           Copy-Item -Force "360Client.cpp" "$mod/360Client_All.cpp"
 
+      - name: Patch fmt branch in CMakeLists
+        shell: pwsh
+        run: |
+          $f = "dll/CMakeLists.txt"
+          $c = Get-Content $f -Raw
+          $c = $c -replace 'GIT_TAG\s+master', 'GIT_TAG origin/main'
+          Set-Content $f $c
+
       - name: Patch EngineCore.hpp
         shell: pwsh
         run: |
