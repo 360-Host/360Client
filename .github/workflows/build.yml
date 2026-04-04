@@ -50,13 +50,51 @@ jobs:
 
           Copy-Item -Force "360Client.cpp" "$mod/360Client_All.cpp"
 
-      - name: Patch fmt branch in CMakeLists
+      - name: Patch dependency branch names in CMakeLists
         shell: pwsh
         run: |
           $f = "dll/CMakeLists.txt"
           $c = Get-Content $f -Raw
-          $c = $c -replace 'GIT_TAG\s+master', 'GIT_TAG origin/main'
+
+          # For each GIT_REPOSITORY + GIT_TAG pair, if the tag is a bare branch name
+          # (master / main / origin/*) rather than a commit SHA or version tag,
+          # resolve the real default branch via git ls-remote and use that.
+          # This makes the step resilient to Flarial renaming branches in the future.
+
+          $repos = [regex]::Matches($c, 'GIT_REPOSITORY\s+(https://github\.com/\S+\.git)\s+GIT_TAG\s+(\S+)')
+
+          foreach ($m in $repos) {
+            $repoUrl = $m.Groups[1].Value
+            $tag     = $m.Groups[2].Value
+
+            # Only touch entries that look like branch names, not commit SHAs or version tags
+            $isBranchLike = ($tag -match '^(master|main)$') -or ($tag -match '^origin/')
+            if (-not $isBranchLike) { continue }
+
+            # Ask the remote what its HEAD branch actually is
+            $lsRemote = git ls-remote --symref $repoUrl HEAD 2>$null
+            if ($lsRemote -match 'ref: refs/heads/(\S+)\s+HEAD') {
+              $realBranch = $Matches[1]
+            } else {
+              $realBranch = "main"   # safe fallback
+            }
+
+            if ($tag -ne $realBranch) {
+              Write-Host "Fixing $repoUrl : GIT_TAG '$tag' -> '$realBranch'"
+              # Replace only the specific GIT_TAG line for this repo
+              $escaped = [regex]::Escape($repoUrl)
+              $c = [regex]::Replace($c,
+                "(?<=GIT_REPOSITORY\s+$escaped\s+GIT_TAG\s+)$([regex]::Escape($tag))",
+                $realBranch)
+            } else {
+              Write-Host "OK $repoUrl : GIT_TAG '$tag' already correct"
+            }
+          }
+
           Set-Content $f $c
+
+          Write-Host "`nFinal GIT_TAG entries in CMakeLists.txt:"
+          Select-String -Path $f -Pattern "GIT_TAG"
 
       - name: Patch EngineCore.hpp
         shell: pwsh
