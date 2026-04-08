@@ -26,7 +26,6 @@
                       Condition="Exists('Resources\360Client.version.txt')" />
   </ItemGroup>
   <ItemGroup>
-    <!-- These match the actual project names in flarialmc/launcher -->
     <ProjectReference Include="..\Flarial.Runtime\Flarial.Runtime.csproj"     PrivateAssets="All" />
     <ProjectReference Include="..\Flarial.Unmanaged\Flarial.Unmanaged.csproj" PrivateAssets="All" />
   </ItemGroup>
