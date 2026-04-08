@@ -39,62 +39,44 @@ jobs:
         shell: pwsh
         run: |
           $base = "dll/src"
-
           Copy-Item -Force "360Client.hpp" "$base/Client/GUI/Engine/360Client.hpp"
-
           $mod = "$base/Client/Module/Modules"
           New-Item -Force -ItemType Directory "$mod/RenderOptions" | Out-Null
           New-Item -Force -ItemType Directory "$mod/Fullbright" | Out-Null
           New-Item -Force -ItemType Directory "$mod/EntityCuller" | Out-Null
           New-Item -Force -ItemType Directory "$mod/RenderOptimizer" | Out-Null
-
           Copy-Item -Force "360Client.cpp" "$mod/360Client_All.cpp"
 
-      - name: Patch dependency branch names in CMakeLists
-        shell: pwsh
+      - name: Patch fmt branch in CMakeLists
+        shell: python
         run: |
-          $f = "dll/CMakeLists.txt"
-          $c = Get-Content $f -Raw
+          import re, sys
 
-          # For each GIT_REPOSITORY + GIT_TAG pair, if the tag is a bare branch name
-          # (master / main / origin/*) rather than a commit SHA or version tag,
-          # resolve the real default branch via git ls-remote and use that.
-          # This makes the step resilient to Flarial renaming branches in the future.
+          path = "dll/CMakeLists.txt"
+          with open(path, "r", encoding="utf-8") as f:
+              content = f.read()
 
-          $repos = [regex]::Matches($c, 'GIT_REPOSITORY\s+(https://github\.com/\S+\.git)\s+GIT_TAG\s+(\S+)')
+          # fmt renamed its default branch from master to main.
+          # Flarial's CMakeLists still says master. Patch only the fmt block.
+          patched = re.sub(
+              r'(GIT_REPOSITORY\s+https://github\.com/fmtlib/fmt\.git\s+GIT_TAG\s+)master',
+              r'\1main',
+              content
+          )
 
-          foreach ($m in $repos) {
-            $repoUrl = $m.Groups[1].Value
-            $tag     = $m.Groups[2].Value
+          if patched == content:
+              print("WARNING: fmt GIT_TAG pattern not found - may already be fixed or CMakeLists changed")
+          else:
+              print("SUCCESS: Patched fmt GIT_TAG master -> main")
 
-            # Only touch entries that look like branch names, not commit SHAs or version tags
-            $isBranchLike = ($tag -match '^(master|main)$') -or ($tag -match '^origin/')
-            if (-not $isBranchLike) { continue }
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(patched)
 
-            # Ask the remote what its HEAD branch actually is
-            $lsRemote = git ls-remote --symref $repoUrl HEAD 2>$null
-            if ($lsRemote -match 'ref: refs/heads/(\S+)\s+HEAD') {
-              $realBranch = $Matches[1]
-            } else {
-              $realBranch = "main"   # safe fallback
-            }
-
-            if ($tag -ne $realBranch) {
-              Write-Host "Fixing $repoUrl : GIT_TAG '$tag' -> '$realBranch'"
-              # Replace only the specific GIT_TAG line for this repo
-              $escaped = [regex]::Escape($repoUrl)
-              $c = [regex]::Replace($c,
-                "(?<=GIT_REPOSITORY\s+$escaped\s+GIT_TAG\s+)$([regex]::Escape($tag))",
-                $realBranch)
-            } else {
-              Write-Host "OK $repoUrl : GIT_TAG '$tag' already correct"
-            }
-          }
-
-          Set-Content $f $c
-
-          Write-Host "`nFinal GIT_TAG entries in CMakeLists.txt:"
-          Select-String -Path $f -Pattern "GIT_TAG"
+          # Print all GIT_TAG lines for verification
+          print("\nAll GIT_TAG entries after patch:")
+          for i, line in enumerate(patched.splitlines(), 1):
+              if "GIT_TAG" in line:
+                  print(f"  Line {i}: {line.strip()}")
 
       - name: Patch EngineCore.hpp
         shell: pwsh
@@ -111,10 +93,8 @@ jobs:
         run: |
           $f = "dll/src/Client/Module/Manager.cpp"
           $c = Get-Content $f -Raw
-
           $inc = '#include "Modules/360Client_All.cpp"'
           $reg = "modules.push_back(new RenderOptions());`nmodules.push_back(new Fullbright());`nmodules.push_back(new EntityCuller());`nmodules.push_back(new RenderOptimizer());"
-
           if ($c -notmatch "360Client_All") {
             $c = $inc + "`n" + $c
             $match = [regex]::Match($c, 'modules\.push_back\(new')
@@ -132,26 +112,23 @@ jobs:
         shell: pwsh
         run: |
           $glmPath = Resolve-Path "dll/external/glm"
-
           cmake -B dll/build -S dll `
             -G "Visual Studio 17 2022" `
             -A x64 `
             -DCMAKE_CXX_STANDARD=17 `
             -DCMAKE_CXX_FLAGS="/I$glmPath"
-
           cmake --build dll/build --config Release
 
       - name: Embed DLL
         shell: pwsh
         run: |
           $dll = Get-ChildItem "dll/build/Release" -Filter "*.dll" | Select-Object -First 1
-          if (!$dll) { Write-Error "DLL not found!"; exit 1 }
-
+          if (!$dll) { Write-Error "DLL not found in dll/build/Release!"; exit 1 }
           $res = "launcher-base/src/Flarial.Launcher/Resources"
           New-Item -Force -ItemType Directory $res | Out-Null
-
           Copy-Item -Force $dll.FullName "$res/360Client.dll"
           Set-Content "$res/360Client.version.txt" "${{ github.ref_name }}"
+          Write-Host "Embedded DLL: $($dll.Name)"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
