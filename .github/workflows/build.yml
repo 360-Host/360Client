@@ -19,10 +19,6 @@ jobs:
         run: git clone https://github.com/flarialmc/dll-oss.git dll
         shell: bash
 
-      - name: Install GLM (needed for rendering)
-        run: git clone https://github.com/g-truc/glm.git dll/external/glm
-        shell: bash
-
       - name: Clone Flarial launcher base
         run: git clone https://github.com/flarialmc/launcher.git launcher-base
         shell: bash
@@ -56,8 +52,6 @@ jobs:
           with open(path, "r", encoding="utf-8") as f:
               content = f.read()
 
-          # fmt renamed its default branch from master to main.
-          # Flarial's CMakeLists still says master. Patch only the fmt block.
           patched = re.sub(
               r'(GIT_REPOSITORY\s+https://github\.com/fmtlib/fmt\.git\s+GIT_TAG\s+)master',
               r'\1main',
@@ -65,14 +59,13 @@ jobs:
           )
 
           if patched == content:
-              print("WARNING: fmt GIT_TAG pattern not found - may already be fixed or CMakeLists changed")
+              print("WARNING: fmt GIT_TAG pattern not found - may already be fixed")
           else:
               print("SUCCESS: Patched fmt GIT_TAG master -> main")
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(patched)
 
-          # Print all GIT_TAG lines for verification
           print("\nAll GIT_TAG entries after patch:")
           for i, line in enumerate(patched.splitlines(), 1):
               if "GIT_TAG" in line:
@@ -108,15 +101,14 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Build DLL (WITH GLM)
+      - name: Build DLL
         shell: pwsh
         run: |
-          $glmPath = Resolve-Path "dll/external/glm"
           cmake -B dll/build -S dll `
             -G "Visual Studio 17 2022" `
             -A x64 `
-            -DCMAKE_CXX_STANDARD=17 `
-            -DCMAKE_CXX_FLAGS="/I$glmPath"
+            -DCMAKE_CXX_STANDARD=17
+
           cmake --build dll/build --config Release
 
       - name: Embed DLL
