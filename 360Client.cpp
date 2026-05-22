@@ -1,16 +1,10 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║  360Client.cpp — ALL custom module implementations in one file      ║
-// ║  Compiled as: src/Client/Module/Modules/360Client/360Client_All.cpp ║
+// ║  Compiled as: src/Client/Module/Modules/360Client_All.cpp           ║
 // ╚══════════════════════════════════════════════════════════════════════╝
-
-// Include paths use the project's include roots:
-//   "src/Client/Module" -> so "Modules/Module.hpp" works
-//   "src/Client"        -> so "Events/...", "SDK/..." work
-//   "src"               -> so "Utils/Utils.hpp" works
 
 #include "GUI/Engine/360Client.hpp"
 #include "Modules/Module.hpp"
-#include "Events/Render/ActorShaderParamsEvent.hpp"
 #include "Events/Render/SetupAndRenderEvent.hpp"
 #include "Events/Render/GammaEvent.hpp"
 #include "Events/Game/TickEvent.hpp"
@@ -19,69 +13,66 @@
 #include "SDK/Client/Actor/Components/StateVectorComponent.hpp"
 #include "SDK/Client/Actor/Components/RenderPositionComponent.hpp"
 #include "SDK/Client/Actor/Components/ActorRotationComponent.hpp"
-#include "SDK/Client/Actor/Components/AABBShapeComponent.hpp"
 #include "SDK/Client/Core/Options.hpp"
+#include "SDK/SDK.hpp"
 #include <cmath>
 #include <algorithm>
 
 using namespace Render360;
 
 // ════════════════════════════════════════════════════════════════════════
-// RENDER OPTIONS — Low / Med / High FPS presets
+// RENDER OPTIONS — mirrors Flarial's own RenderOptions pattern exactly
 // ════════════════════════════════════════════════════════════════════════
-class RenderOptions : public Module {
-    struct Preset { bool sky, weather, entity, blockEntity, particles, chunks; };
-    static constexpr Preset LOW    = { false, false, true,  false, false, false };
-    static constexpr Preset MEDIUM = { true,  false, true,  true,  false, false };
-    static constexpr Preset HIGH   = { true,  true,  true,  true,  true,  false };
+class RenderOptions360 : public Module {
+    void sync() {
+        const auto showChunkMap    = Options::getOption("dev_showChunkMap");
+        const auto disableSky      = Options::getOption("dev_disableRenderSky");
+        const auto disableWeather  = Options::getOption("dev_disableRenderWeather");
+        const auto disableEntities = Options::getOption("dev_disableRenderEntities");
+        const auto disableBlockEnt = Options::getOption("dev_disableRenderBlockEntities");
+        const auto disableParticles= Options::getOption("dev_disableRenderParticles");
 
-    void applyPreset(const std::string& p) {
-        Preset x = HIGH;
-        if      (p == "Low")    x = LOW;
-        else if (p == "Medium") x = MEDIUM;
-        else if (p != "High")   return;
-        setOps("sky",          x.sky);
-        setOps("weather",      x.weather);
-        setOps("entity",       x.entity);
-        setOps("blockentity",  x.blockEntity);
-        setOps("particles",    x.particles);
-        setOps("chunkborders", x.chunks);
+        if (isEnabled()) {
+            if (showChunkMap)     showChunkMap->setvalue(getOps<bool>("chunkborders"));
+            if (disableSky)       disableSky->setvalue(!getOps<bool>("sky"));
+            if (disableWeather)   disableWeather->setvalue(!getOps<bool>("weather"));
+            if (disableEntities)  disableEntities->setvalue(!getOps<bool>("entity"));
+            if (disableBlockEnt)  disableBlockEnt->setvalue(!getOps<bool>("blockentity"));
+            if (disableParticles) disableParticles->setvalue(!getOps<bool>("particles"));
+        } else {
+            if (showChunkMap)     showChunkMap->setvalue(false);
+            if (disableSky)       disableSky->setvalue(false);
+            if (disableWeather)   disableWeather->setvalue(false);
+            if (disableEntities)  disableEntities->setvalue(false);
+            if (disableBlockEnt)  disableBlockEnt->setvalue(false);
+            if (disableParticles) disableParticles->setvalue(false);
+        }
     }
 
-    void sync() {
-        if (!Options::isInitialized()) return;
-        auto s = [](const char* n, bool v) {
-            Option* o = Options::getOption(n);
-            if (o) o->setvalue(v);
-        };
-        if (!isEnabled()) {
-            s("dev_showChunkMap",              false);
-            s("dev_disableRenderSky",          false);
-            s("dev_disableRenderWeather",      false);
-            s("dev_disableRenderEntities",     false);
-            s("dev_disableRenderBlockEntities",false);
-            s("dev_renderBoundingBox",         false);
-            return;
-        }
-        s("dev_showChunkMap",               getOps<bool>("chunkborders"));
-        s("dev_disableRenderSky",          !getOps<bool>("sky"));
-        s("dev_disableRenderWeather",      !getOps<bool>("weather"));
-        s("dev_disableRenderEntities",     !getOps<bool>("entity"));
-        s("dev_disableRenderBlockEntities",!getOps<bool>("blockentity"));
-        s("dev_renderBoundingBox",         !getOps<bool>("particles"));
+    void applyPreset(const std::string& p) {
+        bool sky=true, weather=true, entity=true, blockEnt=true, particles=true, chunks=false;
+        if      (p == "Low")    { sky=false; weather=false; blockEnt=false; particles=false; }
+        else if (p == "Medium") { weather=false; particles=false; }
+        else if (p != "High")   return;
+        this->settings.getSettingByName<bool>("sky")->value         = sky;
+        this->settings.getSettingByName<bool>("weather")->value     = weather;
+        this->settings.getSettingByName<bool>("entity")->value      = entity;
+        this->settings.getSettingByName<bool>("blockentity")->value = blockEnt;
+        this->settings.getSettingByName<bool>("particles")->value   = particles;
+        this->settings.getSettingByName<bool>("chunkborders")->value= chunks;
     }
 
 public:
-    RenderOptions() : Module("Render Options", "FPS presets for low-end devices.",
+    RenderOptions360() : Module("Render Options 360", "FPS presets for low-end devices.",
         IDR_RENDEROPTIONS_PNG, "", false, { "fps", "performance", "low end" }) {}
 
     void onEnable() override {
-        Listen(this, SetupAndRenderEvent, &RenderOptions::onRender)
+        Listen(this, SetupAndRenderEvent, &RenderOptions360::onRender)
         Module::onEnable();
         sync();
     }
     void onDisable() override {
-        Deafen(this, SetupAndRenderEvent, &RenderOptions::onRender)
+        Deafen(this, SetupAndRenderEvent, &RenderOptions360::onRender)
         Module::onDisable();
         sync();
     }
@@ -102,7 +93,11 @@ public:
         std::string cur = getOps<std::string>("preset");
         std::string nw  = FlarialGUI::Dropdown(1, 0, off,
             { "Low", "Medium", "High", "Custom" }, cur, "FPS Preset");
-        if (nw != cur) { setOps("preset", nw); applyPreset(nw); sync(); }
+        if (nw != cur) {
+            this->settings.getSettingByName<std::string>("preset")->value = nw;
+            applyPreset(nw);
+            sync();
+        }
         if (cur == "Custom") {
             addToggle("Sky",           "", "sky");
             addToggle("Weather",       "", "weather");
@@ -121,23 +116,23 @@ public:
 // ════════════════════════════════════════════════════════════════════════
 // FULLBRIGHT — smooth gamma with lerp + ambient floor
 // ════════════════════════════════════════════════════════════════════════
-class Fullbright : public Module {
+class Fullbright360 : public Module {
     float _cur = 1.f, _def = 1.f;
     bool  _gotDef = false;
 
 public:
-    Fullbright() : Module("Fullbright", "Smooth brightness with ambient floor.",
+    Fullbright360() : Module("Fullbright 360", "Smooth brightness with ambient floor.",
         IDR_FULLBRIGHT_PNG, "", false, { "gamma", "brightness", "smooth" }) {}
 
     void onEnable() override {
         _gotDef = false;
-        Listen(this, GammaEvent, &Fullbright::onGamma)
-        Listen(this, TickEvent,  &Fullbright::onTick)
+        Listen(this, GammaEvent, &Fullbright360::onGamma)
+        Listen(this, TickEvent,  &Fullbright360::onTick)
         Module::onEnable();
     }
     void onDisable() override {
-        Deafen(this, GammaEvent, &Fullbright::onGamma)
-        Deafen(this, TickEvent,  &Fullbright::onTick)
+        Deafen(this, GammaEvent, &Fullbright360::onGamma)
+        Deafen(this, TickEvent,  &Fullbright360::onTick)
         _cur = _def;
         Module::onDisable();
     }
@@ -182,24 +177,24 @@ public:
 };
 
 // ════════════════════════════════════════════════════════════════════════
-// ENTITY CULLER — tracks player FOV each tick
+// ENTITY CULLER — tracks player camera state each tick
 // ════════════════════════════════════════════════════════════════════════
-class EntityCuller : public Module {
+class EntityCuller360 : public Module {
     Vec3<float> _cam = Vec3<float>(0, 0, 0);
     Vec3<float> _fwd = Vec3<float>(0, 0, 1);
 
 public:
-    EntityCuller() : Module("Entity Culler",
+    EntityCuller360() : Module("Entity Culler 360",
         "Skip rendering entities outside your FOV. Major FPS boost on servers.",
         IDR_RENDEROPTIONS_PNG, "", false,
         { "fps", "entities", "culling", "performance" }) {}
 
     void onEnable() override {
-        Listen(this, TickEvent, &EntityCuller::onTick)
+        Listen(this, TickEvent, &EntityCuller360::onTick)
         Module::onEnable();
     }
     void onDisable() override {
-        Deafen(this, TickEvent, &EntityCuller::onTick)
+        Deafen(this, TickEvent, &EntityCuller360::onTick)
         Module::onDisable();
     }
 
@@ -207,25 +202,20 @@ public:
         Module::defaultConfig("core");
         setDef("margin",  15.f);
         setDef("mindist", 6.f);
-        setDef("mobs",    true);
-        setDef("items",   true);
     }
 
     void settingsRender(float off) override {
         initSettingsPage();
         addSlider("FOV Margin",   "", "margin",  30.f, 0.f);
         addSlider("Min Distance", "", "mindist", 32.f, 0.f);
-        addToggle("Cull Mobs",  "", "mobs");
-        addToggle("Cull Items", "", "items");
         FlarialGUI::UnsetScrollView();
         resetPadding();
     }
 
     void onTick(TickEvent&) {
         if (!isEnabled()) return;
-        ClientInstance* ci = ClientInstance::get();
-        if (!ci) return;
-        LocalPlayer* p = ci->getLocalPlayer();
+        if (!SDK::clientInstance) return;
+        LocalPlayer* p = SDK::clientInstance->getLocalPlayer();
         if (!p) return;
         RenderPositionComponent* rv = p->getRenderPositionComponent();
         if (rv) _cam = rv->renderPos;
@@ -237,14 +227,14 @@ public:
 // ════════════════════════════════════════════════════════════════════════
 // RENDER OPTIMIZER — chunk FOV culling + LOD tracking
 // ════════════════════════════════════════════════════════════════════════
-class RenderOptimizer : public Module {
+class RenderOptimizer360 : public Module {
     Vec3<float> _pos = Vec3<float>(0, 0, 0);
     Vec3<float> _fwd = Vec3<float>(0, 0, 1);
     int _tick = 0, _vis = 0, _cull = 0;
     static constexpr int EVICT_INTERVAL = 200;
 
 public:
-    RenderOptimizer() : Module("Render Optimizer",
+    RenderOptimizer360() : Module("Render Optimizer 360",
         "Chunk FOV culling + LOD. Tracks which chunks are in view for FPS gains.",
         IDR_RENDEROPTIONS_PNG, "", false,
         { "sodium", "chunks", "lod", "fps", "performance" }) {}
@@ -253,12 +243,12 @@ public:
     static ChunkLOD chunkLOD    (float x, float z) { return ChunkCache::get().getLOD(worldToChunk(x, z)); }
 
     void onEnable() override {
-        Listen(this, TickEvent, &RenderOptimizer::onTick)
+        Listen(this, TickEvent, &RenderOptimizer360::onTick)
         Module::onEnable();
         ChunkCache::get().clear();
     }
     void onDisable() override {
-        Deafen(this, TickEvent, &RenderOptimizer::onTick)
+        Deafen(this, TickEvent, &RenderOptimizer360::onTick)
         ChunkCache::get().clear();
         Module::onDisable();
     }
@@ -285,9 +275,8 @@ public:
 
     void onTick(TickEvent&) {
         if (!isEnabled()) return;
-        ClientInstance* ci = ClientInstance::get();
-        if (!ci) return;
-        LocalPlayer* p = ci->getLocalPlayer();
+        if (!SDK::clientInstance) return;
+        LocalPlayer* p = SDK::clientInstance->getLocalPlayer();
         if (!p) return;
         StateVectorComponent* sv = p->getStateVectorComponent();
         if (sv) _pos = sv->Pos;
@@ -312,10 +301,11 @@ public:
                 float ccx = static_cast<float>(cx) * 16.f + 8.f;
                 float ccz = static_cast<float>(cz) * 16.f + 8.f;
                 float dx = ccx - _pos.x, dz = ccz - _pos.z;
-                if (dx*dx + dz*dz > mxSq) continue;
+                float dSq = dx*dx + dz*dz;
+                if (dSq > mxSq) continue;
                 Vec3<float> center = Vec3<float>(ccx, _pos.y, ccz);
                 bool inFOV = isInFOV(_pos, _fwd, center, fov);
-                ChunkCache::get().update(ChunkPos{cx, cz}, inFOV, dx*dx+dz*dz, rd);
+                ChunkCache::get().update(ChunkPos{cx, cz}, inFOV, dSq, rd);
                 inFOV ? ++vis : ++cull;
             }
         }

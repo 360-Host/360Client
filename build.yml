@@ -77,10 +77,9 @@ jobs:
           $base = "dll\src"
           # Header goes into Engine directory
           Copy-Item -Force "360Client.hpp" "$base\Client\GUI\Engine\360Client.hpp"
-          # All module implementations in one compiled unit
+          # All module implementations in one compiled unit — flat in Modules/
           $mod = "$base\Client\Module\Modules"
-          New-Item -Force -ItemType Directory "$mod\360Client" | Out-Null
-          Copy-Item -Force "360Client.cpp" "$mod\360Client\360Client_All.cpp"
+          Copy-Item -Force "360Client.cpp" "$mod\360Client_All.cpp"
 
       # ── Patch fmt GIT_TAG master -> main ────────────────────────────────
       - name: Patch fmt branch in CMakeLists
@@ -138,7 +137,7 @@ jobs:
           }
 
           # 1. Prepend the combined include
-          $inc = '#include "Modules/360Client/360Client_All.cpp"'
+          $inc = '#include "Modules/360Client_All.cpp"'
           $c   = $inc + "`n" + $c
 
           # 2. Find the LAST existing push_back block so we append after it,
@@ -160,10 +159,10 @@ jobs:
 
           # 3. Insert our registrations on the line AFTER the last push_back
           $insert = @(
-            "    modules.push_back(new RenderOptions());",
-            "    modules.push_back(new Fullbright());",
-            "    modules.push_back(new EntityCuller());",
-            "    modules.push_back(new RenderOptimizer());"
+            "    modules.push_back(new RenderOptions360());",
+            "    modules.push_back(new Fullbright360());",
+            "    modules.push_back(new EntityCuller360());",
+            "    modules.push_back(new RenderOptimizer360());"
           )
           $lines = $lines[0..$lastPB] + $insert + $lines[($lastPB+1)..($lines.Count-1)]
           Set-Content $f ($lines -join "`n") -NoNewline
