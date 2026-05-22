@@ -5,16 +5,14 @@
 // ║  Then #include "360Client.hpp" from EngineCore.hpp                 ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
-// Uses only Flarial-native types (Vec3<float>, Vec2<float>, AABB).
-// No GLM dependency — GLM is not present in dll-oss.
+// Uses only Flarial-native types (Vec3<float>, Vec2<float>).
+// No GLM. Vec3 constructor is explicit — never use brace-init {x,y,z}.
 
-#include <array>
 #include <cmath>
 #include <mutex>
 #include <chrono>
-#include <algorithm>
 #include <unordered_map>
-#include "Utils/Utils.hpp"   // Vec3<float>, Vec2<float>, AABB
+#include "Utils/Utils.hpp"   // Vec3<float>, Vec2<float>
 
 namespace Render360 {
 
@@ -26,56 +24,42 @@ inline std::size_t hashCombine(std::size_t seed, std::size_t v) noexcept {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// MATH HELPERS — replaces GLM with plain std trig on Vec3<float>
+// MATH HELPERS
+// Vec3 has explicit ctor — always use Vec3<float>(x,y,z), never {x,y,z}.
+// Vec3 already has .sub(), .normalize(), .mul(), .add() methods.
+// We add dot product and FOV check on top.
 // ════════════════════════════════════════════════════════════════════════
 inline float vec3Dot(const Vec3<float>& a, const Vec3<float>& b) noexcept {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-inline float vec3LenSq(const Vec3<float>& v) noexcept {
-    return v.x * v.x + v.y * v.y + v.z * v.z;
-}
-
-inline float vec3Len(const Vec3<float>& v) noexcept {
-    return std::sqrt(vec3LenSq(v));
-}
-
-inline Vec3<float> vec3Norm(const Vec3<float>& v) noexcept {
-    float l = vec3Len(v);
-    if (l < 0.0001f) return { 0.f, 0.f, 0.f };
-    return { v.x / l, v.y / l, v.z / l };
-}
-
-inline Vec3<float> vec3Sub(const Vec3<float>& a, const Vec3<float>& b) noexcept {
-    return { a.x - b.x, a.y - b.y, a.z - b.z };
-}
-
 inline float distSq(const Vec3<float>& a, const Vec3<float>& b) noexcept {
-    return vec3LenSq(vec3Sub(a, b));
+    Vec3<float> d = a.sub(b);
+    return d.x * d.x + d.y * d.y + d.z * d.z;
 }
 
-// Returns true if 'world' falls within fovDeg of the 'fwd' direction
-// as seen from 'cam'.
+// Returns true if 'world' falls within fovDeg of the 'fwd' direction from 'cam'.
 inline bool isInFOV(const Vec3<float>& cam,
                     const Vec3<float>& fwd,
                     const Vec3<float>& world,
                     float fovDeg) noexcept {
-    Vec3<float> d = vec3Sub(world, cam);
-    float dist = vec3Len(d);
+    Vec3<float> d = world.sub(cam);
+    float dist = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
     if (dist < 0.001f) return true;
+    Vec3<float> dn = d.mul(1.f / dist);
     float cosHalf = std::cos(fovDeg * 0.5f * 3.14159265f / 180.f);
-    return vec3Dot(fwd, { d.x / dist, d.y / dist, d.z / dist }) >= cosHalf;
+    return vec3Dot(fwd, dn) >= cosHalf;
 }
 
-// Build a normalised forward vector from yaw/pitch (degrees, Minecraft convention)
+// Build normalised forward vector from yaw/pitch (degrees, Minecraft convention).
 inline Vec3<float> forwardFromRotation(float yawDeg, float pitchDeg) noexcept {
     float yr = yawDeg   * 3.14159265f / 180.f;
     float pr = pitchDeg * 3.14159265f / 180.f;
-    return vec3Norm({
+    return Vec3<float>(
         -std::sin(yr) * std::cos(pr),
          std::sin(pr),
         -std::cos(yr) * std::cos(pr)
-    });
+    ).normalize();
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -113,7 +97,6 @@ public:
         s.distanceSq = dSq;
         s.everLoaded = true;
         if (inFOV) s.lastSeen = std::chrono::steady_clock::now();
-
         float d  = std::sqrt(dSq);
         float mx = static_cast<float>(maxRd) * 16.f;
         if      (!inFOV)         s.lod = ChunkLOD::Hidden;
@@ -155,8 +138,8 @@ private:
 };
 
 inline ChunkPos worldToChunk(float x, float z) noexcept {
-    return { static_cast<int>(std::floor(x / 16.f)),
-             static_cast<int>(std::floor(z / 16.f)) };
+    return ChunkPos{ static_cast<int>(std::floor(x / 16.f)),
+                     static_cast<int>(std::floor(z / 16.f)) };
 }
 
 } // namespace Render360

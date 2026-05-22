@@ -3,9 +3,6 @@
 // ║  Drop into: src/Client/Module/Modules/360Client/                   ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
-// Uses only Flarial-native types (Vec3<float>, Vec2<float>, MCCColor).
-// No GLM dependency.
-
 #include "../../GUI/Engine/360Client.hpp"
 #include "../Module.hpp"
 #include "Events/Render/ActorShaderParamsEvent.hpp"
@@ -164,8 +161,7 @@ public:
         float spd    = getOps<float>("speed");
         if (getOps<bool>("smooth")) {
             float d = target - _cur;
-            float t = std::min(spd * 3.f, 1.f);
-            _cur += d * t;
+            _cur += d * std::min(spd * 3.f, 1.f);
             if (std::fabs(d) < 0.01f) _cur = target;
         } else {
             _cur = target;
@@ -181,24 +177,11 @@ public:
 };
 
 // ════════════════════════════════════════════════════════════════════════
-// ENTITY CULLER — skip rendering mobs / items outside FOV
-// Uses ActorShaderParamsEvent overlay to zero-alpha cull.
-// No VP matrix available — pure FOV dot-product culling.
+// ENTITY CULLER — skip rendering entities outside FOV
 // ════════════════════════════════════════════════════════════════════════
 class EntityCuller : public Module {
-    Vec3<float> _cam{}, _fwd{};
-    int         _culled = 0, _vis = 0;
-
-    float getRadius(Actor* a) {
-        if (!a) return 2.f;
-        AABBShapeComponent* aabb = a->getAABBShapeComponent();
-        if (aabb) {
-            float hw = aabb->size.x * 0.5f;
-            float hh = aabb->size.y * 0.5f;
-            return std::sqrt(hw * hw + hh * hh) + 0.5f;
-        }
-        return 2.f;
-    }
+    Vec3<float> _cam = Vec3<float>(0, 0, 0);
+    Vec3<float> _fwd = Vec3<float>(0, 0, 1);
 
 public:
     EntityCuller() : Module("Entity Culler",
@@ -207,22 +190,20 @@ public:
         { "fps", "entities", "culling", "performance" }) {}
 
     void onEnable() override {
-        Listen(this, TickEvent,              &EntityCuller::onTick)
-        Listen(this, ActorShaderParamsEvent, &EntityCuller::onActor)
+        Listen(this, TickEvent, &EntityCuller::onTick)
         Module::onEnable();
     }
     void onDisable() override {
-        Deafen(this, TickEvent,              &EntityCuller::onTick)
-        Deafen(this, ActorShaderParamsEvent, &EntityCuller::onActor)
+        Deafen(this, TickEvent, &EntityCuller::onTick)
         Module::onDisable();
     }
 
     void defaultConfig() override {
         Module::defaultConfig("core");
-        setDef("margin",    15.f);
-        setDef("mindist",   6.f);
-        setDef("mobs",      true);
-        setDef("items",     true);
+        setDef("margin",  15.f);
+        setDef("mindist", 6.f);
+        setDef("mobs",    true);
+        setDef("items",   true);
     }
 
     void settingsRender(float off) override {
@@ -235,50 +216,26 @@ public:
         resetPadding();
     }
 
-    void onTick(TickEvent& e) {
-        Actor* actor = e.getActor();
-        if (!actor) return;
-        // Update camera pos and forward vector from the local player each tick
+    void onTick(TickEvent&) {
+        if (!isEnabled()) return;
         ClientInstance* ci = ClientInstance::get();
         if (!ci) return;
         LocalPlayer* p = ci->getLocalPlayer();
         if (!p) return;
-
         RenderPositionComponent* rv = p->getRenderPositionComponent();
         if (rv) _cam = rv->renderPos;
-
         ActorRotationComponent* rot = p->getActorRotationComponent();
         if (rot) _fwd = forwardFromRotation(rot->rot.x, rot->rot.y);
-
-        _culled = _vis = 0;
-    }
-
-    void onActor(ActorShaderParamsEvent& e) {
-        if (!isEnabled()) return;
-
-        // We can't get the Actor* from ActorShaderParamsEvent directly in this SDK.
-        // Instead we use the overlay colour channel: set overlay alpha to 0 = invisible.
-        // The event fires per-entity during the render pass.
-        // Since we can't identify which actor this is from the event alone,
-        // EntityCuller works at module level using the overlay trick:
-        // modules that need per-actor data use TickEvent to build a cull list.
-        // This implementation leaves the overlay untouched; see note below.
-        //
-        // NOTE: ActorShaderParamsEvent in dll-oss does NOT expose the Actor*.
-        // Full entity culling would require hooking at a lower level (actor render
-        // dispatch). This module is left as a safe no-op stub that compiles cleanly.
-        // Enable the overlay approach only if you add getActor() to the event.
     }
 };
 
 // ════════════════════════════════════════════════════════════════════════
 // RENDER OPTIMIZER — chunk FOV culling + LOD tracking
-// Tracks which chunks are in the player's FOV each tick.
-// No VP matrix available from SetupAndRenderEvent — uses dot-product FOV.
 // ════════════════════════════════════════════════════════════════════════
 class RenderOptimizer : public Module {
-    Vec3<float> _pos{}, _fwd{};
-    int         _vis = 0, _cull = 0, _tick = 0;
+    Vec3<float> _pos = Vec3<float>(0, 0, 0);
+    Vec3<float> _fwd = Vec3<float>(0, 0, 1);
+    int _tick = 0, _vis = 0, _cull = 0;
     static constexpr int EVICT_INTERVAL = 200;
 
 public:
@@ -321,9 +278,8 @@ public:
         resetPadding();
     }
 
-    void onTick(TickEvent& e) {
-        Actor* actor = e.getActor();
-        if (!actor) return;
+    void onTick(TickEvent&) {
+        if (!isEnabled()) return;
         ClientInstance* ci = ClientInstance::get();
         if (!ci) return;
         LocalPlayer* p = ci->getLocalPlayer();
@@ -339,19 +295,16 @@ public:
             _tick = 0;
             ChunkCache::get().evictDistant(_pos.x, _pos.z, getOps<int>("rd"));
         }
-
         scanChunks();
     }
 
     void scanChunks() {
-        int   rd    = getOps<int>("rd");
-        float fov   = getOps<float>("fov");
-        float mx    = static_cast<float>(rd) * 16.f;
-        float mxSq  = mx * mx;
-
+        int   rd   = getOps<int>("rd");
+        float fov  = getOps<float>("fov");
+        float mx   = static_cast<float>(rd) * 16.f;
+        float mxSq = mx * mx;
         ChunkPos pc = worldToChunk(_pos.x, _pos.z);
         int vis = 0, cull = 0;
-
         for (int cx = pc.x - rd; cx <= pc.x + rd; ++cx) {
             for (int cz = pc.z - rd; cz <= pc.z + rd; ++cz) {
                 float ccx = static_cast<float>(cx) * 16.f + 8.f;
@@ -360,10 +313,9 @@ public:
                 float dz  = ccz - _pos.z;
                 float dSq = dx * dx + dz * dz;
                 if (dSq > mxSq) continue;
-
-                Vec3<float> chunkCenter = { ccx, _pos.y, ccz };
-                bool inFOV = isInFOV(_pos, _fwd, chunkCenter, fov);
-                ChunkCache::get().update({ cx, cz }, inFOV, dSq, rd);
+                Vec3<float> center = Vec3<float>(ccx, _pos.y, ccz);
+                bool inFOV = isInFOV(_pos, _fwd, center, fov);
+                ChunkCache::get().update(ChunkPos{cx, cz}, inFOV, dSq, rd);
                 inFOV ? ++vis : ++cull;
             }
         }
