@@ -12,7 +12,7 @@
 #include <mutex>
 #include <chrono>
 #include <unordered_map>
-#include "Utils/Utils.hpp"   // Vec3<float>, Vec2<float>
+#include "Utils/Utils.hpp"  // Vec3<float>, Vec2<float> — resolved via "src" include root
 
 namespace Render360 {
 

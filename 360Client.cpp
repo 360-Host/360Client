@@ -1,10 +1,15 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║  360Client.cpp — ALL custom module implementations in one file      ║
-// ║  Drop into: src/Client/Module/Modules/360Client/                   ║
+// ║  Compiled as: src/Client/Module/Modules/360Client/360Client_All.cpp ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
-#include "../../GUI/Engine/360Client.hpp"
-#include "../Module.hpp"
+// Include paths use the project's include roots:
+//   "src/Client/Module" -> so "Modules/Module.hpp" works
+//   "src/Client"        -> so "Events/...", "SDK/..." work
+//   "src"               -> so "Utils/Utils.hpp" works
+
+#include "GUI/Engine/360Client.hpp"
+#include "Modules/Module.hpp"
 #include "Events/Render/ActorShaderParamsEvent.hpp"
 #include "Events/Render/SetupAndRenderEvent.hpp"
 #include "Events/Render/GammaEvent.hpp"
@@ -177,7 +182,7 @@ public:
 };
 
 // ════════════════════════════════════════════════════════════════════════
-// ENTITY CULLER — skip rendering entities outside FOV
+// ENTITY CULLER — tracks player FOV each tick
 // ════════════════════════════════════════════════════════════════════════
 class EntityCuller : public Module {
     Vec3<float> _cam = Vec3<float>(0, 0, 0);
@@ -284,13 +289,10 @@ public:
         if (!ci) return;
         LocalPlayer* p = ci->getLocalPlayer();
         if (!p) return;
-
         StateVectorComponent* sv = p->getStateVectorComponent();
         if (sv) _pos = sv->Pos;
-
         ActorRotationComponent* rot = p->getActorRotationComponent();
         if (rot) _fwd = forwardFromRotation(rot->rot.x, rot->rot.y);
-
         if (++_tick >= EVICT_INTERVAL) {
             _tick = 0;
             ChunkCache::get().evictDistant(_pos.x, _pos.z, getOps<int>("rd"));
@@ -309,17 +311,14 @@ public:
             for (int cz = pc.z - rd; cz <= pc.z + rd; ++cz) {
                 float ccx = static_cast<float>(cx) * 16.f + 8.f;
                 float ccz = static_cast<float>(cz) * 16.f + 8.f;
-                float dx  = ccx - _pos.x;
-                float dz  = ccz - _pos.z;
-                float dSq = dx * dx + dz * dz;
-                if (dSq > mxSq) continue;
+                float dx = ccx - _pos.x, dz = ccz - _pos.z;
+                if (dx*dx + dz*dz > mxSq) continue;
                 Vec3<float> center = Vec3<float>(ccx, _pos.y, ccz);
                 bool inFOV = isInFOV(_pos, _fwd, center, fov);
-                ChunkCache::get().update(ChunkPos{cx, cz}, inFOV, dSq, rd);
+                ChunkCache::get().update(ChunkPos{cx, cz}, inFOV, dx*dx+dz*dz, rd);
                 inFOV ? ++vis : ++cull;
             }
         }
-        _vis  = vis;
-        _cull = cull;
+        _vis = vis; _cull = cull;
     }
 };
