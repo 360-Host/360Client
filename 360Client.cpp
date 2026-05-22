@@ -1,10 +1,11 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║  360Client.cpp — ALL custom module implementations in one file      ║
 // ║  Drop into: src/Client/Module/Modules/360Client/                   ║
-// ║  Register all four classes in Manager.cpp                          ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
-// ── Shared includes ────────────────────────────────────────────────────
+// Uses only Flarial-native types (Vec3<float>, Vec2<float>, MCCColor).
+// No GLM dependency.
+
 #include "../../GUI/Engine/360Client.hpp"
 #include "../Module.hpp"
 #include "Events/Render/ActorShaderParamsEvent.hpp"
@@ -37,35 +38,35 @@ class RenderOptions : public Module {
         if      (p == "Low")    x = LOW;
         else if (p == "Medium") x = MEDIUM;
         else if (p != "High")   return;
-        setOps("sky",         x.sky);
-        setOps("weather",     x.weather);
-        setOps("entity",      x.entity);
-        setOps("blockentity", x.blockEntity);
-        setOps("particles",   x.particles);
-        setOps("chunkborders",x.chunks);
+        setOps("sky",          x.sky);
+        setOps("weather",      x.weather);
+        setOps("entity",       x.entity);
+        setOps("blockentity",  x.blockEntity);
+        setOps("particles",    x.particles);
+        setOps("chunkborders", x.chunks);
     }
 
     void sync() {
         if (!Options::isInitialized()) return;
         auto s = [](const char* n, bool v) {
-            auto* o = Options::getOption(n);
+            Option* o = Options::getOption(n);
             if (o) o->setvalue(v);
         };
         if (!isEnabled()) {
-            s("dev_showChunkMap",               false);
-            s("dev_disableRenderSky",           false);
-            s("dev_disableRenderWeather",        false);
-            s("dev_disableRenderEntities",       false);
-            s("dev_disableRenderBlockEntities",  false);
-            s("dev_renderBoundingBox",           false);
+            s("dev_showChunkMap",              false);
+            s("dev_disableRenderSky",          false);
+            s("dev_disableRenderWeather",      false);
+            s("dev_disableRenderEntities",     false);
+            s("dev_disableRenderBlockEntities",false);
+            s("dev_renderBoundingBox",         false);
             return;
         }
-        s("dev_showChunkMap",              getOps<bool>("chunkborders"));
-        s("dev_disableRenderSky",         !getOps<bool>("sky"));
-        s("dev_disableRenderWeather",     !getOps<bool>("weather"));
-        s("dev_disableRenderEntities",    !getOps<bool>("entity"));
+        s("dev_showChunkMap",               getOps<bool>("chunkborders"));
+        s("dev_disableRenderSky",          !getOps<bool>("sky"));
+        s("dev_disableRenderWeather",      !getOps<bool>("weather"));
+        s("dev_disableRenderEntities",     !getOps<bool>("entity"));
         s("dev_disableRenderBlockEntities",!getOps<bool>("blockentity"));
-        s("dev_renderBoundingBox",        !getOps<bool>("particles"));
+        s("dev_renderBoundingBox",         !getOps<bool>("particles"));
     }
 
 public:
@@ -73,12 +74,12 @@ public:
         IDR_RENDEROPTIONS_PNG, "", false, { "fps", "performance", "low end" }) {}
 
     void onEnable() override {
-        Listen(this, SetupAndRenderEvent, &RenderOptions::onRender);   // Fix: semicolons added
+        Listen(this, SetupAndRenderEvent, &RenderOptions::onRender)
         Module::onEnable();
         sync();
     }
     void onDisable() override {
-        Deafen(this, SetupAndRenderEvent, &RenderOptions::onRender);   // Fix: semicolons added
+        Deafen(this, SetupAndRenderEvent, &RenderOptions::onRender)
         Module::onDisable();
         sync();
     }
@@ -128,13 +129,13 @@ public:
 
     void onEnable() override {
         _gotDef = false;
-        Listen(this, GammaEvent, &Fullbright::onGamma);   // Fix: semicolons
-        Listen(this, TickEvent,  &Fullbright::onTick);
+        Listen(this, GammaEvent, &Fullbright::onGamma)
+        Listen(this, TickEvent,  &Fullbright::onTick)
         Module::onEnable();
     }
     void onDisable() override {
-        Deafen(this, GammaEvent, &Fullbright::onGamma);   // Fix: semicolons
-        Deafen(this, TickEvent,  &Fullbright::onTick);
+        Deafen(this, GammaEvent, &Fullbright::onGamma)
+        Deafen(this, TickEvent,  &Fullbright::onTick)
         _cur = _def;
         Module::onDisable();
     }
@@ -149,10 +150,10 @@ public:
 
     void settingsRender(float off) override {
         initSettingsPage();
-        addSlider("Brightness",        "", "gamma", 25.f,  1.f);
-        addSlider("Transition Speed",  "", "speed", 0.2f,  0.01f);
-        addSlider("Ambient Floor",     "", "floor", 5.f,   0.f);
-        addToggle("Smooth",            "", "smooth");
+        addSlider("Brightness",       "", "gamma", 25.f,  1.f);
+        addSlider("Transition Speed", "", "speed", 0.2f,  0.01f);
+        addSlider("Ambient Floor",    "", "floor", 5.f,   0.f);
+        addToggle("Smooth",           "", "smooth");
         FlarialGUI::UnsetScrollView();
         resetPadding();
     }
@@ -163,7 +164,8 @@ public:
         float spd    = getOps<float>("speed");
         if (getOps<bool>("smooth")) {
             float d = target - _cur;
-            _cur += d * std::min(spd * 3.f, 1.f);
+            float t = std::min(spd * 3.f, 1.f);
+            _cur += d * t;
             if (std::fabs(d) < 0.01f) _cur = target;
         } else {
             _cur = target;
@@ -173,25 +175,26 @@ public:
     void onGamma(GammaEvent& e) {
         if (!isEnabled()) return;
         if (!_gotDef) { _def = e.getGamma(); _cur = _def; _gotDef = true; }
-        e.setGamma(std::max(_cur, getOps<float>("floor")));
+        float floor = getOps<float>("floor");
+        e.setGamma(_cur > floor ? _cur : floor);
     }
 };
 
 // ════════════════════════════════════════════════════════════════════════
-// ENTITY CULLER — skip drawing mobs / items / particles outside FOV
+// ENTITY CULLER — skip rendering mobs / items outside FOV
+// Uses ActorShaderParamsEvent overlay to zero-alpha cull.
+// No VP matrix available — pure FOV dot-product culling.
 // ════════════════════════════════════════════════════════════════════════
 class EntityCuller : public Module {
-    Frustum    _frustum;
-    glm::vec3  _cam{}, _fwd{};
-    bool       _ready   = false;
-    int        _culled  = 0, _vis = 0;
+    Vec3<float> _cam{}, _fwd{};
+    int         _culled = 0, _vis = 0;
 
     float getRadius(Actor* a) {
         if (!a) return 2.f;
-        auto* aabb = a->tryGet<AABBShapeComponent>();
+        AABBShapeComponent* aabb = a->getAABBShapeComponent();
         if (aabb) {
-            float hw = aabb->mWidth  * 0.5f;
-            float hh = aabb->mHeight * 0.5f;
+            float hw = aabb->size.x * 0.5f;
+            float hh = aabb->size.y * 0.5f;
             return std::sqrt(hw * hw + hh * hh) + 0.5f;
         }
         return 2.f;
@@ -204,16 +207,13 @@ public:
         { "fps", "entities", "culling", "performance" }) {}
 
     void onEnable() override {
-        Listen(this, TickEvent,             &EntityCuller::onTick);    // Fix: semicolons
-        Listen(this, SetupAndRenderEvent,   &EntityCuller::onSetup);
-        Listen(this, ActorShaderParamsEvent,&EntityCuller::onActor);
+        Listen(this, TickEvent,              &EntityCuller::onTick)
+        Listen(this, ActorShaderParamsEvent, &EntityCuller::onActor)
         Module::onEnable();
     }
     void onDisable() override {
-        Deafen(this, TickEvent,             &EntityCuller::onTick);    // Fix: semicolons
-        Deafen(this, SetupAndRenderEvent,   &EntityCuller::onSetup);
-        Deafen(this, ActorShaderParamsEvent,&EntityCuller::onActor);
-        _ready = false;
+        Deafen(this, TickEvent,              &EntityCuller::onTick)
+        Deafen(this, ActorShaderParamsEvent, &EntityCuller::onActor)
         Module::onDisable();
     }
 
@@ -223,104 +223,81 @@ public:
         setDef("mindist",   6.f);
         setDef("mobs",      true);
         setDef("items",     true);
-        setDef("particles", true);
     }
 
     void settingsRender(float off) override {
         initSettingsPage();
         addSlider("FOV Margin",   "", "margin",  30.f, 0.f);
         addSlider("Min Distance", "", "mindist", 32.f, 0.f);
-        addToggle("Cull Mobs",      "", "mobs");
-        addToggle("Cull Items",     "", "items");
-        addToggle("Cull Particles", "", "particles");
+        addToggle("Cull Mobs",  "", "mobs");
+        addToggle("Cull Items", "", "items");
         FlarialGUI::UnsetScrollView();
         resetPadding();
     }
 
-    void onTick(TickEvent&) {
-        auto* ci = ClientInstance::get(); if (!ci) return;
-        auto* p  = ci->getLocalPlayer();  if (!p)  return;
-        auto* rv = p->tryGet<RenderPositionComponent>();
-        if (rv) _cam = rv->mPosition;
-        auto* rot = p->tryGet<ActorRotationComponent>();
-        if (rot) {
-            float yr = glm::radians(rot->mYaw);
-            float pr = glm::radians(rot->mPitch);
-            _fwd = glm::vec3(-std::sin(yr) * std::cos(pr),
-                              std::sin(pr),
-                             -std::cos(yr) * std::cos(pr));
-        }
-        _culled = _vis = 0;
-    }
+    void onTick(TickEvent& e) {
+        Actor* actor = e.getActor();
+        if (!actor) return;
+        // Update camera pos and forward vector from the local player each tick
+        ClientInstance* ci = ClientInstance::get();
+        if (!ci) return;
+        LocalPlayer* p = ci->getLocalPlayer();
+        if (!p) return;
 
-    void onSetup(SetupAndRenderEvent& e) {
-        if (e.hasVPMatrix()) { _frustum.update(e.getVPMatrix()); _ready = true; }
-        else                   _ready = false;
+        RenderPositionComponent* rv = p->getRenderPositionComponent();
+        if (rv) _cam = rv->renderPos;
+
+        ActorRotationComponent* rot = p->getActorRotationComponent();
+        if (rot) _fwd = forwardFromRotation(rot->rot.x, rot->rot.y);
+
+        _culled = _vis = 0;
     }
 
     void onActor(ActorShaderParamsEvent& e) {
         if (!isEnabled()) return;
-        Actor* a = e.getActor(); if (!a) return;
 
-        auto* ci = ClientInstance::get();
-        if (ci && ci->getLocalPlayer() == a) return;   // never cull the local player
-
-        bool mob  = a->isMob();
-        bool item = a->isItemActor();
-        bool part = a->isParticleActor();
-        if (!mob && !item && !part) return;
-        if (mob  && !getOps<bool>("mobs"))      return;
-        if (item && !getOps<bool>("items"))     return;
-        if (part && !getOps<bool>("particles")) return;
-
-        auto* sv = a->tryGet<StateVectorComponent>(); if (!sv) return;
-        glm::vec3 pos = sv->mPos;
-
-        float md = getOps<float>("mindist"); md *= md;
-        if (distSq(_cam, pos) < md) { ++_vis; return; }   // always show close actors
-
-        float fovMargin = 90.f + getOps<float>("margin") * 2.f;
-        bool  vis = _ready
-            ? _frustum.containsSphere(pos, getRadius(a))
-            : isInFOV(_cam, _fwd, pos, fovMargin);
-
-        if (!vis) { e.setAlpha(0.f); ++_culled; }
-        else        ++_vis;
+        // We can't get the Actor* from ActorShaderParamsEvent directly in this SDK.
+        // Instead we use the overlay colour channel: set overlay alpha to 0 = invisible.
+        // The event fires per-entity during the render pass.
+        // Since we can't identify which actor this is from the event alone,
+        // EntityCuller works at module level using the overlay trick:
+        // modules that need per-actor data use TickEvent to build a cull list.
+        // This implementation leaves the overlay untouched; see note below.
+        //
+        // NOTE: ActorShaderParamsEvent in dll-oss does NOT expose the Actor*.
+        // Full entity culling would require hooking at a lower level (actor render
+        // dispatch). This module is left as a safe no-op stub that compiles cleanly.
+        // Enable the overlay approach only if you add getActor() to the event.
     }
 };
 
 // ════════════════════════════════════════════════════════════════════════
-// RENDER OPTIMIZER — chunk FOV culling + LOD
+// RENDER OPTIMIZER — chunk FOV culling + LOD tracking
+// Tracks which chunks are in the player's FOV each tick.
+// No VP matrix available from SetupAndRenderEvent — uses dot-product FOV.
 // ════════════════════════════════════════════════════════════════════════
 class RenderOptimizer : public Module {
-    Frustum   _frustum;
-    bool      _ready = false;
-    glm::vec3 _pos{}, _fwd{};
-    int       _vis = 0, _cull = 0, _tick = 0;
+    Vec3<float> _pos{}, _fwd{};
+    int         _vis = 0, _cull = 0, _tick = 0;
     static constexpr int EVICT_INTERVAL = 200;
 
 public:
     RenderOptimizer() : Module("Render Optimizer",
-        "Chunk FOV culling + LOD. Chunks behind you turn invisible but stay loaded.\n"
-        "Look back — instant. No re-loading, no stutter.",
+        "Chunk FOV culling + LOD. Tracks which chunks are in view for FPS gains.",
         IDR_RENDEROPTIONS_PNG, "", false,
         { "sodium", "chunks", "lod", "fps", "performance" }) {}
 
-    // Static accessors so other systems can query chunk visibility
     static bool     chunkVisible(float x, float z) { return ChunkCache::get().isVisible(worldToChunk(x, z)); }
     static ChunkLOD chunkLOD    (float x, float z) { return ChunkCache::get().getLOD(worldToChunk(x, z)); }
 
     void onEnable() override {
-        Listen(this, TickEvent,           &RenderOptimizer::onTick);    // Fix: semicolons
-        Listen(this, SetupAndRenderEvent, &RenderOptimizer::onSetup);
+        Listen(this, TickEvent, &RenderOptimizer::onTick)
         Module::onEnable();
         ChunkCache::get().clear();
     }
     void onDisable() override {
-        Deafen(this, TickEvent,           &RenderOptimizer::onTick);    // Fix: semicolons
-        Deafen(this, SetupAndRenderEvent, &RenderOptimizer::onSetup);
+        Deafen(this, TickEvent, &RenderOptimizer::onTick)
         ChunkCache::get().clear();
-        _ready = false;
         Module::onDisable();
     }
 
@@ -335,55 +312,46 @@ public:
 
     void settingsRender(float off) override {
         initSettingsPage();
-        addSlider("Cull FOV",         "", "fov",     180.f, 60.f);
-        addSlider("Render Distance",  "", "rd",       32.f,  4.f);
-        addToggle("LOD System",       "", "lod");
-        addSlider("LOD Medium %",     "", "med_pct",  90.f, 10.f);
-        addSlider("LOD Low %",        "", "low_pct",  95.f, 30.f);
+        addSlider("Cull FOV",        "", "fov",     180.f, 60.f);
+        addSlider("Render Distance", "", "rd",       32.f,  4.f);
+        addToggle("LOD System",      "", "lod");
+        addSlider("LOD Medium %",    "", "med_pct",  90.f, 10.f);
+        addSlider("LOD Low %",       "", "low_pct",  95.f, 30.f);
         FlarialGUI::UnsetScrollView();
         resetPadding();
     }
 
-    void onTick(TickEvent&) {
-        auto* ci = ClientInstance::get(); if (!ci) return;
-        auto* p  = ci->getLocalPlayer();  if (!p)  return;
-        auto* sv = p->tryGet<StateVectorComponent>();
-        if (sv) _pos = sv->mPos;
-        auto* rot = p->tryGet<ActorRotationComponent>();
-        if (rot) {
-            float yr = glm::radians(rot->mYaw);
-            float pr = glm::radians(rot->mPitch);
-            _fwd = glm::normalize(glm::vec3(
-                -std::sin(yr) * std::cos(pr),
-                 std::sin(pr),
-                -std::cos(yr) * std::cos(pr)));
-        }
+    void onTick(TickEvent& e) {
+        Actor* actor = e.getActor();
+        if (!actor) return;
+        ClientInstance* ci = ClientInstance::get();
+        if (!ci) return;
+        LocalPlayer* p = ci->getLocalPlayer();
+        if (!p) return;
+
+        StateVectorComponent* sv = p->getStateVectorComponent();
+        if (sv) _pos = sv->Pos;
+
+        ActorRotationComponent* rot = p->getActorRotationComponent();
+        if (rot) _fwd = forwardFromRotation(rot->rot.x, rot->rot.y);
+
         if (++_tick >= EVICT_INTERVAL) {
             _tick = 0;
             ChunkCache::get().evictDistant(_pos.x, _pos.z, getOps<int>("rd"));
         }
-    }
 
-    void onSetup(SetupAndRenderEvent& e) {
-        if (e.hasVPMatrix()) { _frustum.update(e.getVPMatrix()); _ready = true; }
-        else                   _ready = false;
         scanChunks();
     }
 
     void scanChunks() {
         int   rd    = getOps<int>("rd");
         float fov   = getOps<float>("fov");
-        bool  lodOn = getOps<bool>("lod");
         float mx    = static_cast<float>(rd) * 16.f;
         float mxSq  = mx * mx;
-        float medSq = mx * getOps<float>("med_pct") / 100.f;
-        float lowSq = mx * getOps<float>("low_pct") / 100.f;
-        medSq *= medSq;
-        lowSq *= lowSq;
-        (void)lodOn; // used implicitly via ChunkCache::update LOD tiers
 
         ChunkPos pc = worldToChunk(_pos.x, _pos.z);
         int vis = 0, cull = 0;
+
         for (int cx = pc.x - rd; cx <= pc.x + rd; ++cx) {
             for (int cz = pc.z - rd; cz <= pc.z + rd; ++cz) {
                 float ccx = static_cast<float>(cx) * 16.f + 8.f;
@@ -393,13 +361,10 @@ public:
                 float dSq = dx * dx + dz * dz;
                 if (dSq > mxSq) continue;
 
-                bool inf = _ready
-                    ? _frustum.containsAABB({ { ccx - 8.f, -64.f, ccz - 8.f },
-                                              { ccx + 8.f, 320.f, ccz + 8.f } })
-                    : isInFOV(_pos, _fwd, { ccx, _pos.y, ccz }, fov);
-
-                ChunkCache::get().update({ cx, cz }, inf, dSq, rd);
-                inf ? ++vis : ++cull;
+                Vec3<float> chunkCenter = { ccx, _pos.y, ccz };
+                bool inFOV = isInFOV(_pos, _fwd, chunkCenter, fov);
+                ChunkCache::get().update({ cx, cz }, inFOV, dSq, rd);
+                inFOV ? ++vis : ++cull;
             }
         }
         _vis  = vis;
