@@ -12,41 +12,80 @@ jobs:
       contents: write
 
     steps:
+      # ── Checkout with full tag history so ref_name is always populated ──
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
+      # ── Resolve version: tag on tag-push, "dev-<sha>" on manual dispatch ──
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}"
+          if ([string]::IsNullOrWhiteSpace($v) -or $v -eq "main" -or $v -eq "master") {
+            $v = "dev-$("${{ github.sha }}".Substring(0,7))"
+          }
+          echo "VERSION=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version: $v"
+
+      # ── Clone Flarial bases ──────────────────────────────────────────────
       - name: Clone Flarial dll-oss base
-        run: git clone https://github.com/flarialmc/dll-oss.git dll
+        run: git clone --depth 1 https://github.com/flarialmc/dll-oss.git dll
         shell: bash
 
       - name: Clone Flarial launcher base
-        run: git clone https://github.com/flarialmc/launcher.git launcher-base
+        run: git clone --depth 1 https://github.com/flarialmc/launcher.git launcher-base
         shell: bash
 
+      # ── Generate AssemblyVersion.cs (required by .csproj) ───────────────
+      - name: Generate AssemblyVersion.cs
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.VERSION }}"
+          # Strip leading 'v' and non-numeric chars for .NET version quad (e.g. v1.2.3 -> 1.2.3.0)
+          $dotnet = $v -replace '^v','' -replace '[^0-9.]',''
+          $parts  = $dotnet.Split('.')
+          while ($parts.Count -lt 4) { $parts += '0' }
+          $quad   = ($parts[0..3]) -join '.'
+          $content = @"
+using System.Reflection;
+[assembly: AssemblyVersion("$quad")]
+[assembly: AssemblyFileVersion("$quad")]
+[assembly: AssemblyInformationalVersion("$v")]
+"@
+          # Write next to the other source files; .csproj references it as ..\AssemblyVersion.cs
+          $dst = "launcher-base\src\AssemblyVersion.cs"
+          Set-Content $dst $content
+          Write-Host "AssemblyVersion.cs -> $quad  ($v)"
+
+      # ── Overlay our launcher files ───────────────────────────────────────
       - name: Overlay launcher files
         shell: pwsh
         run: |
-          $dst = "launcher-base/src/Flarial.Launcher"
-          New-Item -Force -ItemType Directory "$dst/Runtime" | Out-Null
-          Copy-Item -Force "Launcher360.cs" "$dst/Launcher360.cs"
-          Copy-Item -Force "Flarial.Launcher.csproj" "$dst/Flarial.Launcher.csproj"
+          $dst = "launcher-base\src\Flarial.Launcher"
+          New-Item -Force -ItemType Directory "$dst\Runtime" | Out-Null
+          Copy-Item -Force "Launcher360.cs"          "$dst\Launcher360.cs"
+          Copy-Item -Force "Flarial.Launcher.csproj" "$dst\Flarial.Launcher.csproj"
 
+      # ── Overlay our client files ─────────────────────────────────────────
       - name: Overlay client files
         shell: pwsh
         run: |
-          $base = "dll/src"
-          Copy-Item -Force "360Client.hpp" "$base/Client/GUI/Engine/360Client.hpp"
-          $mod = "$base/Client/Module/Modules"
-          New-Item -Force -ItemType Directory "$mod/RenderOptions" | Out-Null
-          New-Item -Force -ItemType Directory "$mod/Fullbright" | Out-Null
-          New-Item -Force -ItemType Directory "$mod/EntityCuller" | Out-Null
-          New-Item -Force -ItemType Directory "$mod/RenderOptimizer" | Out-Null
-          Copy-Item -Force "360Client.cpp" "$mod/360Client_All.cpp"
+          $base = "dll\src"
+          # Header goes into Engine directory
+          Copy-Item -Force "360Client.hpp" "$base\Client\GUI\Engine\360Client.hpp"
+          # All module implementations in one compiled unit
+          $mod = "$base\Client\Module\Modules"
+          Copy-Item -Force "360Client.cpp" "$mod\360Client_All.cpp"
 
+      # ── Patch fmt GIT_TAG master -> main ────────────────────────────────
       - name: Patch fmt branch in CMakeLists
         shell: python
         run: |
-          import re, sys
+          import re
 
           path = "dll/CMakeLists.txt"
           with open(path, "r", encoding="utf-8") as f:
@@ -59,45 +98,80 @@ jobs:
           )
 
           if patched == content:
-              print("WARNING: fmt GIT_TAG pattern not found - may already be fixed")
+              print("INFO: fmt GIT_TAG pattern not found or already fixed")
           else:
               print("SUCCESS: Patched fmt GIT_TAG master -> main")
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(patched)
 
-          print("\nAll GIT_TAG entries after patch:")
+          print("GIT_TAG lines after patch:")
           for i, line in enumerate(patched.splitlines(), 1):
               if "GIT_TAG" in line:
                   print(f"  Line {i}: {line.strip()}")
 
+      # ── Patch EngineCore.hpp to include our header ───────────────────────
       - name: Patch EngineCore.hpp
         shell: pwsh
         run: |
-          $f = "dll/src/Client/GUI/Engine/EngineCore.hpp"
+          $f = "dll\src\Client\GUI\Engine\EngineCore.hpp"
           $c = Get-Content $f -Raw
-          if ($c -notmatch "360Client.hpp") {
+          if ($c -notmatch [regex]::Escape('360Client.hpp')) {
             $c = "#include `"360Client.hpp`"`n" + $c
-            Set-Content $f $c
+            Set-Content $f $c -NoNewline
+            Write-Host "Patched EngineCore.hpp"
+          } else {
+            Write-Host "EngineCore.hpp already includes 360Client.hpp"
           }
 
-      - name: Register modules
+      # ── Register our modules in Manager.cpp ─────────────────────────────
+      #   FIX: old workflow used wrong class names (RenderOptions, Fullbright,
+      #   EntityCuller, RenderOptimizer) — the actual classes are suffixed with
+      #   360 (RenderOptions360, etc.).  Also fixed insertion point to append
+      #   AFTER the last push_back rather than before the first one, which could
+      #   land inside a conditional block.
+      - name: Register modules in Manager.cpp
         shell: pwsh
         run: |
-          $f = "dll/src/Client/Module/Manager.cpp"
+          $f = "dll\src\Client\Module\Manager.cpp"
           $c = Get-Content $f -Raw
-          $inc = '#include "Modules/360Client_All.cpp"'
-          $reg = "modules.push_back(new RenderOptions());`nmodules.push_back(new Fullbright());`nmodules.push_back(new EntityCuller());`nmodules.push_back(new RenderOptimizer());"
-          if ($c -notmatch "360Client_All") {
-            $c = $inc + "`n" + $c
-            $match = [regex]::Match($c, 'modules\.push_back\(new')
-            if ($match.Success) {
-              $index = $match.Index
-              $c = $c.Insert($index, "$reg`n")
-            }
-            Set-Content $f $c
+
+          if ($c -match '360Client_All') {
+            Write-Host "Modules already registered, skipping."
+            exit 0
           }
 
+          # 1. Prepend the combined include
+          $inc = '#include "Modules/360Client_All.cpp"'
+          $c   = $inc + "`n" + $c
+
+          # 2. Find the LAST existing push_back line so we append after it
+          $lines  = $c -split "`n"
+          $lastPB = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            $l = $lines[$i].TrimStart()
+            if ($l -match '^modules\.push_back\(' -and $l -notmatch '^//') {
+              $lastPB = $i
+            }
+          }
+
+          if ($lastPB -lt 0) {
+            Write-Error "Could not find any modules.push_back() call in Manager.cpp"
+            exit 1
+          }
+
+          # 3. Insert our registrations on the line AFTER the last push_back
+          $insert = @(
+            "    modules.push_back(new RenderOptions360());",
+            "    modules.push_back(new Fullbright360());",
+            "    modules.push_back(new EntityCuller360());",
+            "    modules.push_back(new RenderOptimizer360());"
+          )
+          $lines = $lines[0..$lastPB] + $insert + $lines[($lastPB+1)..($lines.Count-1)]
+          Set-Content $f ($lines -join "`n") -NoNewline
+          Write-Host "Registered 4 modules after line $lastPB"
+
+      # ── Build the DLL (C++) ──────────────────────────────────────────────
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
@@ -107,37 +181,68 @@ jobs:
           cmake -B dll/build -S dll `
             -G "Visual Studio 17 2022" `
             -A x64 `
-            -DCMAKE_CXX_STANDARD=17
+            -DCMAKE_CXX_STANDARD=17 `
+            -DCMAKE_BUILD_TYPE=Release
 
-          cmake --build dll/build --config Release
+          cmake --build dll/build --config Release --parallel
 
+      # ── Embed the built DLL into the launcher resources ──────────────────
       - name: Embed DLL
         shell: pwsh
         run: |
-          $dll = Get-ChildItem "dll/build/Release" -Filter "*.dll" | Select-Object -First 1
-          if (!$dll) { Write-Error "DLL not found in dll/build/Release!"; exit 1 }
-          $res = "launcher-base/src/Flarial.Launcher/Resources"
-          New-Item -Force -ItemType Directory $res | Out-Null
-          Copy-Item -Force $dll.FullName "$res/360Client.dll"
-          Set-Content "$res/360Client.version.txt" "${{ github.ref_name }}"
-          Write-Host "Embedded DLL: $($dll.Name)"
+          # Sort by date descending and skip CRT redistributables
+          $candidates = Get-ChildItem "dll/build/Release" -Filter "*.dll" |
+                        Where-Object { $_.Name -notmatch '^(msvcp|vcruntime|ucrtbase)' } |
+                        Sort-Object LastWriteTime -Descending
 
+          if ($candidates.Count -eq 0) {
+            Write-Error "No client DLL found in dll/build/Release. Build may have failed."
+            exit 1
+          }
+
+          $dll = $candidates[0]
+          Write-Host "Using DLL: $($dll.FullName)"
+
+          $res = "launcher-base\src\Flarial.Launcher\Resources"
+          New-Item -Force -ItemType Directory $res | Out-Null
+          Copy-Item -Force $dll.FullName "$res\360Client.dll"
+          Set-Content "$res\360Client.version.txt" "${{ steps.ver.outputs.VERSION }}"
+          Write-Host "Embedded as 360Client.dll  version=${{ steps.ver.outputs.VERSION }}"
+
+      # ── Build the EXE (C#) ───────────────────────────────────────────────
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          dotnet restore "launcher-base\src\Flarial.Launcher\Flarial.Launcher.csproj"
 
       - name: Build EXE
         shell: pwsh
         run: |
-          dotnet publish launcher-base/src/Flarial.Launcher/Flarial.Launcher.csproj `
+          dotnet publish "launcher-base\src\Flarial.Launcher\Flarial.Launcher.csproj" `
             --configuration Release `
             --runtime win-x64 `
             --self-contained false `
+            -p:AssemblyName=360Launcher `
             -o out
 
+          if (-not (Test-Path "out\360Launcher.exe")) {
+            Write-Error "360Launcher.exe not found in out\ after publish."
+            exit 1
+          }
+          Write-Host "Build succeeded: out\360Launcher.exe"
+
+      # ── Create GitHub Release ────────────────────────────────────────────
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "360Launcher ${{ github.ref_name }}"
+          name: "360Launcher ${{ steps.ver.outputs.VERSION }}"
+          tag_name: ${{ steps.ver.outputs.VERSION }}
           files: out/360Launcher.exe
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
