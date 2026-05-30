@@ -51,11 +51,11 @@ jobs:
           while ($parts.Count -lt 4) { $parts += '0' }
           $quad   = ($parts[0..3]) -join '.'
           $content = @"
-          using System.Reflection;
-          [assembly: AssemblyVersion("$quad")]
-          [assembly: AssemblyFileVersion("$quad")]
-          [assembly: AssemblyInformationalVersion("$v")]
-          "@
+using System.Reflection;
+[assembly: AssemblyVersion("$quad")]
+[assembly: AssemblyFileVersion("$quad")]
+[assembly: AssemblyInformationalVersion("$v")]
+"@
           # Write next to the other source files; .csproj references it as ..\AssemblyVersion.cs
           $dst = "launcher-base\src\AssemblyVersion.cs"
           Set-Content $dst $content
@@ -125,13 +125,25 @@ jobs:
           }
 
       # ── Register our modules in Manager.cpp ─────────────────────────────
-      #   FIX 1: old workflow used wrong class names — the actual classes are
-      #          suffixed with 360 (RenderOptions360, Fullbright360, etc.)
-      #   FIX 2: old workflow used a hard-coded push_back pattern that doesn't
-      #          exist in Flarial's Manager.cpp — replaced with a Python step
-      #          that inspects the file, prints its registration pattern so we
-      #          can see it in the log, then finds the correct insertion point
-      #          using multiple fallback strategies.
+      #
+      #   Two bugs fixed here vs all previous attempts:
+      #
+      #   BUG A — Unity build redefinition (C2011):
+      #     Flarial uses a CMake unity build that merges all .cpp files into
+      #     one translation unit.  Adding  #include "360Client_All.cpp"  to
+      #     Manager.cpp caused the classes to be defined twice (once from the
+      #     direct include, once when the unity blob compiled the file again).
+      #     Fix: do NOT include the .cpp.  Instead add forward declarations
+      #     and let CMake discover the file automatically (it already does,
+      #     because the file lives inside the scanned Modules/ tree).
+      #
+      #   BUG B — Wrong insertion point / 'modules' undeclared (C2065):
+      #     Flarial uses addModule<T>() not modules.push_back(new T()).
+      #     Previous strategies either inserted outside any function scope
+      #     (Strategy 3 fallback) or matched nothing at all.
+      #     Fix: find the last  addModule<...>();  line and append after it.
+      #     This is now the only strategy; if it fails the step prints the
+      #     file so you can diagnose, then exits non-zero.
       - name: Register modules in Manager.cpp
         shell: python
         run: |
@@ -141,73 +153,59 @@ jobs:
           with open(path, "r", encoding="utf-8") as f:
               content = f.read()
 
-          if "360Client_All" in content:
+          if "RenderOptions360" in content:
               print("Modules already registered, skipping.")
               sys.exit(0)
 
-          # ── Diagnostic: show what module-registration lines look like ──
-          print("=== Existing module-registration lines in Manager.cpp ===")
-          for i, line in enumerate(content.splitlines(), 1):
-              s = line.strip()
-              if re.search(r'\bnew\b.*Module|addModule|modules\b.*push|emplace|insert', s, re.I):
-                  print(f"  Line {i}: {s}")
-          print("==========================================================")
-
-          # ── Prepend our include ────────────────────────────────────────
-          inc = '#include "Modules/360Client_All.cpp"\n'
-          content = inc + content
-
-          our_lines = (
-              '    modules.push_back(new RenderOptions360());\n'
-              '    modules.push_back(new Fullbright360());\n'
-              '    modules.push_back(new EntityCuller360());\n'
-              '    modules.push_back(new RenderOptimizer360());\n'
+          # ── Forward-declare our classes so Manager.cpp can call addModule<T>
+          #    without seeing a full definition (the unity build handles the rest).
+          fwd = (
+              "\n// 360Client forward declarations\n"
+              "class RenderOptions360;\n"
+              "class Fullbright360;\n"
+              "class EntityCuller360;\n"
+              "class RenderOptimizer360;\n"
           )
 
-          # ── Strategy 1: last push_back / emplace_back / addModule ─────
-          patterns = [
-              r'(?m)^[ \t]*modules\.(?:push_back|emplace_back)\s*\(.*\)\s*;[ \t]*$',
-              r'(?m)^[ \t]*(?:addModule|modules\.add)\s*\(.*\)\s*;[ \t]*$',
-              r'(?m)^[ \t]*\w+\.(?:push_back|emplace_back)\s*\(\s*new\s+\w+.*\)\s*;[ \t]*$',
-          ]
+          # Insert forward declarations right before the first #include or at top
+          first_inc = content.find('#include')
+          if first_inc == -1:
+              first_inc = 0
+          content = content[:first_inc] + fwd + content[first_inc:]
+
+          # ── Find the last addModule<...>() call — Flarial's registration pattern
           last_match = None
-          for pat in patterns:
-              for m in re.finditer(pat, content):
+          for m in re.finditer(r'(?m)^[ \t]*addModule<[^>]+>\(\)[^;]*;[ \t]*$', content):
+              last_match = m
+
+          if last_match is None:
+              # Fallback: any line that looks like a template module call
+              for m in re.finditer(r'(?m)^[ \t]*\w+<[^>]+>\([^)]*\)\s*;[ \t]*$', content):
                   last_match = m
-              if last_match:
-                  break
 
-          if last_match:
-              insert_pos = last_match.end()
-              # Step past any trailing newline so we insert on the NEXT line
-              if insert_pos < len(content) and content[insert_pos] == '\n':
-                  insert_pos += 1
-              content = content[:insert_pos] + our_lines + content[insert_pos:]
-              print(f"Strategy 1: inserted after '{last_match.group().strip()}'")
+          if last_match is None:
+              print("ERROR: Could not find any addModule<T>() call in Manager.cpp.")
+              print("First 4000 chars of file:")
+              print(content[:4000])
+              sys.exit(1)
 
-          else:
-              # ── Strategy 2: closing brace of a function named loadModules /
-              #    initModules / setupModules / registerModules ──────────────
-              fn_match = re.search(
-                  r'(?:void|auto)\s+\w*[Mm]odules?\w*\s*\([^)]*\)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}',
-                  content, re.S)
-              if fn_match:
-                  insert_pos = fn_match.end() - 1  # just before the closing }
-                  content = content[:insert_pos] + our_lines + content[insert_pos:]
-                  print("Strategy 2: inserted before closing brace of module function")
-              else:
-                  # ── Strategy 3: append before the last closing brace in file ─
-                  last_brace = content.rfind('}')
-                  if last_brace == -1:
-                      print("ERROR: Cannot find any insertion point in Manager.cpp")
-                      print("Full file content:")
-                      print(content[:3000])
-                      sys.exit(1)
-                  content = content[:last_brace] + our_lines + content[last_brace:]
-                  print("Strategy 3: inserted before final closing brace (fallback)")
+          # Insert our four registrations immediately after the last addModule line
+          insert_pos = last_match.end()
+          if insert_pos < len(content) and content[insert_pos] == '\n':
+              insert_pos += 1
+
+          our_calls = (
+              "    addModule<RenderOptions360>();\n"
+              "    addModule<Fullbright360>();\n"
+              "    addModule<EntityCuller360>();\n"
+              "    addModule<RenderOptimizer360>();\n"
+          )
+          content = content[:insert_pos] + our_calls + content[insert_pos:]
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(content)
+
+          print(f"Inserted after: '{last_match.group().strip()}'")
           print("Successfully registered RenderOptions360, Fullbright360, EntityCuller360, RenderOptimizer360")
 
       # ── Build the DLL (C++) ──────────────────────────────────────────────
