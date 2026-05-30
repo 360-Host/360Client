@@ -9,6 +9,7 @@ Download one `.exe` — the launcher and client DLL are merged inside it.
 
 ## Features
 
+- **Blue theme** — left-rail navigation, 360 branding
 - **Entity Culler** — skips rendering mobs and items outside your FOV
 - **Chunk FOV Culling** — chunks behind you turn invisible but stay loaded. Look back — instant
 - **LOD System** — lower detail at long render distances for FPS gains
