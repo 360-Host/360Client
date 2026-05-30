@@ -51,11 +51,11 @@ jobs:
           while ($parts.Count -lt 4) { $parts += '0' }
           $quad   = ($parts[0..3]) -join '.'
           $content = @"
-using System.Reflection;
-[assembly: AssemblyVersion("$quad")]
-[assembly: AssemblyFileVersion("$quad")]
-[assembly: AssemblyInformationalVersion("$v")]
-"@
+          using System.Reflection;
+          [assembly: AssemblyVersion("$quad")]
+          [assembly: AssemblyFileVersion("$quad")]
+          [assembly: AssemblyInformationalVersion("$v")]
+          "@
           # Write next to the other source files; .csproj references it as ..\AssemblyVersion.cs
           $dst = "launcher-base\src\AssemblyVersion.cs"
           Set-Content $dst $content
