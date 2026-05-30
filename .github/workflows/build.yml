@@ -51,11 +51,11 @@ jobs:
           while ($parts.Count -lt 4) { $parts += '0' }
           $quad   = ($parts[0..3]) -join '.'
           $content = @"
-          using System.Reflection;
-          [assembly: AssemblyVersion("$quad")]
-          [assembly: AssemblyFileVersion("$quad")]
-          [assembly: AssemblyInformationalVersion("$v")]
-          "@
+using System.Reflection;
+[assembly: AssemblyVersion("$quad")]
+[assembly: AssemblyFileVersion("$quad")]
+[assembly: AssemblyInformationalVersion("$v")]
+"@
           # Write next to the other source files; .csproj references it as ..\AssemblyVersion.cs
           $dst = "launcher-base\src\AssemblyVersion.cs"
           Set-Content $dst $content
@@ -125,51 +125,90 @@ jobs:
           }
 
       # ── Register our modules in Manager.cpp ─────────────────────────────
-      #   FIX: old workflow used wrong class names (RenderOptions, Fullbright,
-      #   EntityCuller, RenderOptimizer) — the actual classes are suffixed with
-      #   360 (RenderOptions360, etc.).  Also fixed insertion point to append
-      #   AFTER the last push_back rather than before the first one, which could
-      #   land inside a conditional block.
+      #   FIX 1: old workflow used wrong class names — the actual classes are
+      #          suffixed with 360 (RenderOptions360, Fullbright360, etc.)
+      #   FIX 2: old workflow used a hard-coded push_back pattern that doesn't
+      #          exist in Flarial's Manager.cpp — replaced with a Python step
+      #          that inspects the file, prints its registration pattern so we
+      #          can see it in the log, then finds the correct insertion point
+      #          using multiple fallback strategies.
       - name: Register modules in Manager.cpp
-        shell: pwsh
+        shell: python
         run: |
-          $f = "dll\src\Client\Module\Manager.cpp"
-          $c = Get-Content $f -Raw
+          import re, sys
 
-          if ($c -match '360Client_All') {
-            Write-Host "Modules already registered, skipping."
-            exit 0
-          }
+          path = r"dll\src\Client\Module\Manager.cpp"
+          with open(path, "r", encoding="utf-8") as f:
+              content = f.read()
 
-          # 1. Prepend the combined include
-          $inc = '#include "Modules/360Client_All.cpp"'
-          $c   = $inc + "`n" + $c
+          if "360Client_All" in content:
+              print("Modules already registered, skipping.")
+              sys.exit(0)
 
-          # 2. Find the LAST existing push_back line so we append after it
-          $lines  = $c -split "`n"
-          $lastPB = -1
-          for ($i = 0; $i -lt $lines.Count; $i++) {
-            $l = $lines[$i].TrimStart()
-            if ($l -match '^modules\.push_back\(' -and $l -notmatch '^//') {
-              $lastPB = $i
-            }
-          }
+          # ── Diagnostic: show what module-registration lines look like ──
+          print("=== Existing module-registration lines in Manager.cpp ===")
+          for i, line in enumerate(content.splitlines(), 1):
+              s = line.strip()
+              if re.search(r'\bnew\b.*Module|addModule|modules\b.*push|emplace|insert', s, re.I):
+                  print(f"  Line {i}: {s}")
+          print("==========================================================")
 
-          if ($lastPB -lt 0) {
-            Write-Error "Could not find any modules.push_back() call in Manager.cpp"
-            exit 1
-          }
+          # ── Prepend our include ────────────────────────────────────────
+          inc = '#include "Modules/360Client_All.cpp"\n'
+          content = inc + content
 
-          # 3. Insert our registrations on the line AFTER the last push_back
-          $insert = @(
-            "    modules.push_back(new RenderOptions360());",
-            "    modules.push_back(new Fullbright360());",
-            "    modules.push_back(new EntityCuller360());",
-            "    modules.push_back(new RenderOptimizer360());"
+          our_lines = (
+              '    modules.push_back(new RenderOptions360());\n'
+              '    modules.push_back(new Fullbright360());\n'
+              '    modules.push_back(new EntityCuller360());\n'
+              '    modules.push_back(new RenderOptimizer360());\n'
           )
-          $lines = $lines[0..$lastPB] + $insert + $lines[($lastPB+1)..($lines.Count-1)]
-          Set-Content $f ($lines -join "`n") -NoNewline
-          Write-Host "Registered 4 modules after line $lastPB"
+
+          # ── Strategy 1: last push_back / emplace_back / addModule ─────
+          patterns = [
+              r'(?m)^[ \t]*modules\.(?:push_back|emplace_back)\s*\(.*\)\s*;[ \t]*$',
+              r'(?m)^[ \t]*(?:addModule|modules\.add)\s*\(.*\)\s*;[ \t]*$',
+              r'(?m)^[ \t]*\w+\.(?:push_back|emplace_back)\s*\(\s*new\s+\w+.*\)\s*;[ \t]*$',
+          ]
+          last_match = None
+          for pat in patterns:
+              for m in re.finditer(pat, content):
+                  last_match = m
+              if last_match:
+                  break
+
+          if last_match:
+              insert_pos = last_match.end()
+              # Step past any trailing newline so we insert on the NEXT line
+              if insert_pos < len(content) and content[insert_pos] == '\n':
+                  insert_pos += 1
+              content = content[:insert_pos] + our_lines + content[insert_pos:]
+              print(f"Strategy 1: inserted after '{last_match.group().strip()}'")
+
+          else:
+              # ── Strategy 2: closing brace of a function named loadModules /
+              #    initModules / setupModules / registerModules ──────────────
+              fn_match = re.search(
+                  r'(?:void|auto)\s+\w*[Mm]odules?\w*\s*\([^)]*\)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}',
+                  content, re.S)
+              if fn_match:
+                  insert_pos = fn_match.end() - 1  # just before the closing }
+                  content = content[:insert_pos] + our_lines + content[insert_pos:]
+                  print("Strategy 2: inserted before closing brace of module function")
+              else:
+                  # ── Strategy 3: append before the last closing brace in file ─
+                  last_brace = content.rfind('}')
+                  if last_brace == -1:
+                      print("ERROR: Cannot find any insertion point in Manager.cpp")
+                      print("Full file content:")
+                      print(content[:3000])
+                      sys.exit(1)
+                  content = content[:last_brace] + our_lines + content[last_brace:]
+                  print("Strategy 3: inserted before final closing brace (fallback)")
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(content)
+          print("Successfully registered RenderOptions360, Fullbright360, EntityCuller360, RenderOptimizer360")
 
       # ── Build the DLL (C++) ──────────────────────────────────────────────
       - name: Setup MSBuild
